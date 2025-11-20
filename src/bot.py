@@ -2,6 +2,7 @@
 Telegram bot handler
 Manages registration and login confirmation via Telegram
 """
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from src.config import settings
@@ -32,16 +33,22 @@ class TeleLoginBot:
         # TODO: Implement login confirmation logic
         pass
     
-    def run(self):
-        """Start the bot"""
+    async def start(self):
+        """Initialize and start the bot"""
+        # Initialize database
+        await self.db.init_db()
+        
+        # Add handlers
         self.app.add_handler(CommandHandler("start", self.start_command))
         
-        # Initialize database before starting
-        import asyncio
-        asyncio.run(self.db.init_db())
+        # Start polling
+        await self.app.initialize()
+        await self.app.start()
+        await self.app.updater.start_polling()
         
-        self.app.run_polling()
+        # Run until stopped
+        await asyncio.Event().wait()
 
 if __name__ == "__main__":
     bot = TeleLoginBot()
-    bot.run()
+    asyncio.run(bot.start())
