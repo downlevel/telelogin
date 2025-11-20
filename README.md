@@ -133,7 +133,7 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your BOT_TOKEN and SECRET_KEY
+# Edit .env with your BOT_TOKEN, BOT_USERNAME, and SECRET_KEY
 
 # Run the application
 uvicorn src.app:app --reload
@@ -144,7 +144,7 @@ uvicorn src.app:app --reload
 ```bash
 # Configure environment
 cp docker/env.example docker/.env
-# Edit docker/.env with your BOT_TOKEN and SECRET_KEY
+# Edit docker/.env with your BOT_TOKEN, BOT_USERNAME, and SECRET_KEY
 
 # Start services (API + Telegram bot)
 cd docker
@@ -325,6 +325,7 @@ Create a `.env` file with the following variables:
 
 ```bash
 BOT_TOKEN=xxxx
+BOT_USERNAME=your_bot_username
 DB_URL=sqlite:///db.sqlite3
 SECRET_KEY=xxxxx
 ```

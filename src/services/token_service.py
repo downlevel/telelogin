@@ -80,8 +80,10 @@ class TokenService:
             logger.error(f"Error verifying token: {e}")
             return None
     
-    def create_telegram_link(self, token: str, bot_username: str = "YourBot") -> str:
+    def create_telegram_link(self, token: str, bot_username: str = None) -> str:
         """
         Create Telegram deep link with token
         """
+        if bot_username is None:
+            bot_username = settings.BOT_USERNAME
         return f"https://t.me/{bot_username}?start={token}"

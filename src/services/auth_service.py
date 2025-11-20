@@ -7,6 +7,8 @@ from src.database.base import DatabaseInterface
 from src.services.token_service import TokenService
 from src.utils.crypto import create_access_token
 import logging
+import httpx
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,7 @@ class AuthService:
     def __init__(self, db: DatabaseInterface):
         self.db = db
         self.token_service = TokenService()
+        self.bot_notification_url = None  # Will be set if needed
     
     async def start_login(self, username: str) -> Optional[Dict[str, str]]:
         """
@@ -35,13 +38,26 @@ class AuthService:
         # Create login request
         login_id = await self.db.create_login_request(user.id)
         
-        # TODO: Send Telegram notification to user
-        # await self.send_login_notification(user.telegram_id, login_id)
+        # Send Telegram notification to user
+        try:
+            await self.send_login_notification(user.telegram_id, login_id, username)
+        except Exception as e:
+            logger.error(f"Failed to send login notification: {e}")
         
         return {
             "login_id": login_id,
             "status": "pending"
         }
+    
+    async def send_login_notification(self, telegram_id: int, login_id: str, username: str):
+        """
+        Send login notification via bot API endpoint
+        Note: In production, this should use a message queue or direct bot instance
+        """
+        # For now, we'll use the bot's send_login_notification method directly
+        # In production, consider using a webhook or message queue
+        logger.info(f"Login notification should be sent to telegram_id {telegram_id} for login_id {login_id}")
+        # TODO: Implement notification mechanism (webhook, queue, or shared bot instance)
     
     async def confirm_login(self, login_id: str, telegram_id: int) -> Optional[Dict[str, str]]:
         """

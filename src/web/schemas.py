@@ -18,6 +18,14 @@ class LoginStartResponse(BaseModel):
     login_id: str
     status: str
 
+class LinkTelegramRequest(BaseModel):
+    token: str
+    telegram_id: int
+
+class LinkTelegramResponse(BaseModel):
+    success: bool
+    message: str
+
 class LoginConfirmRequest(BaseModel):
     login_id: str
     telegram_id: int

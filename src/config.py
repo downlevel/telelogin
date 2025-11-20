@@ -8,6 +8,7 @@ from typing import Optional
 class Settings(BaseSettings):
     # Bot configuration
     BOT_TOKEN: str
+    BOT_USERNAME: str = "YourBot"  # Telegram bot username (without @)
     
     # Database configuration (SQLite only)
     DB_URL: str = "sqlite:///db.sqlite3"

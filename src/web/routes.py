@@ -8,6 +8,8 @@ from src.web.schemas import (
     RegisterResponse,
     LoginStartRequest,
     LoginStartResponse,
+    LinkTelegramRequest,
+    LinkTelegramResponse,
     LoginConfirmRequest,
     LoginConfirmResponse,
     LoginStatusResponse
@@ -43,6 +45,28 @@ async def register(request: RegisterRequest):
     link = token_service.create_telegram_link(token)
     
     return RegisterResponse(link=link)
+
+@router.post("/auth/link-telegram", response_model=LinkTelegramResponse)
+async def link_telegram(request: LinkTelegramRequest):
+    """
+    Link Telegram account to user (called by bot after /start with token)
+    """
+    # Verify registration token
+    user_id = token_service.verify_registration_token(request.token)
+    
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    
+    # Link telegram_id to user
+    success = await user_service.link_telegram(user_id, request.telegram_id)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to link Telegram account")
+    
+    return LinkTelegramResponse(
+        success=True,
+        message="Telegram account linked successfully"
+    )
 
 @router.post("/auth/start-login", response_model=LoginStartResponse)
 async def start_login(request: LoginStartRequest):
