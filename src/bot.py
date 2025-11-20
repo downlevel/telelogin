@@ -7,11 +7,13 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from src.config import settings
 from src.services.auth_service import AuthService
 from src.services.token_service import TokenService
+from src.database.sqlite import SQLiteDatabase
 
 class TeleLoginBot:
     def __init__(self):
         self.app = Application.builder().token(settings.BOT_TOKEN).build()
-        self.auth_service = AuthService()
+        self.db = SQLiteDatabase()
+        self.auth_service = AuthService(self.db)
         self.token_service = TokenService()
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
