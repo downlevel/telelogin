@@ -116,6 +116,8 @@ telelogin/
 
 ## 🚀 Quick Start
 
+### Option 1: Local Development
+
 ```bash
 # Create virtual environment
 python -m venv venv
@@ -129,9 +131,33 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
+# Configure environment
+cp .env.example .env
+# Edit .env with your BOT_TOKEN and SECRET_KEY
+
 # Run the application
 uvicorn src.app:app --reload
 ```
+
+### Option 2: Docker Deployment
+
+```bash
+# Configure environment
+cp docker/env.example docker/.env
+# Edit docker/.env with your BOT_TOKEN and SECRET_KEY
+
+# Start services (API + Telegram bot)
+cd docker
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop services
+docker compose down
+```
+
+**Note:** With Docker, the API runs on port 8000 by default. You can change it by setting `API_PORT` in `docker/.env`.
 
 ---
 

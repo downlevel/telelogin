@@ -7,7 +7,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
