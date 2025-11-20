@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TeleLogin - Telegram Authentication</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #0088cc;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #006699;
+        }
+        input {
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 80%;
+            margin: 10px 0;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .pending {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 TeleLogin</h1>
+        <p>Secure authentication via Telegram</p>
+        
+        <div id="loginForm">
+            <input type="text" id="username" placeholder="Enter your username">
+            <br>
+            <button onclick="startLogin()">Login with Telegram</button>
+        </div>
+        
+        <div id="status" style="display:none;" class="status">
+            <p id="statusMessage"></p>
+        </div>
+    </div>
+
+    <script>
+        let loginId = null;
+        let statusInterval = null;
+
+        async function startLogin() {
+            const username = document.getElementById('username').value;
+            if (!username) {
+                alert('Please enter your username');
+                return;
+            }
+
+            try {
+                const response = await fetch('/auth/start-login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username})
+                });
+
+                if (!response.ok) {
+                    alert('Login failed. Please check your username.');
+                    return;
+                }
+
+                const data = await response.json();
+                loginId = data.login_id;
+
+                document.getElementById('status').style.display = 'block';
+                document.getElementById('status').className = 'status pending';
+                document.getElementById('statusMessage').textContent = 
+                    'Check your Telegram for confirmation...';
+
+                // Poll for status
+                statusInterval = setInterval(checkStatus, 2000);
+
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function checkStatus() {
+            if (!loginId) return;
+
+            try {
+                const response = await fetch(`/status/${loginId}`);
+                const data = await response.json();
+
+                if (data.status === 'approved') {
+                    clearInterval(statusInterval);
+                    document.getElementById('status').className = 'status success';
+                    document.getElementById('statusMessage').textContent = 
+                        '✓ Login successful!';
+                }
+            } catch (error) {
+                console.error('Status check failed:', error);
+            }
+        }
+    </script>
+</body>
+</html>

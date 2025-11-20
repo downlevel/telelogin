@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # FastAPI backend
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - api_data:/app/data
+    restart: unless-stopped
+    networks:
+      - telelogin_network
+
+  # Telegram bot
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "src.bot"]
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - api_data:/app/data
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - telelogin_network
+
+volumes:
+  api_data:
+
+networks:
+  telelogin_network:
+    driver: bridge

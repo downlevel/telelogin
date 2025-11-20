@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TeleLogin Example</title>
+    <script src="telelogin.js"></script>
+</head>
+<body>
+    <h1>TeleLogin JavaScript Example</h1>
+    
+    <div id="app">
+        <input type="text" id="username" placeholder="Enter username">
+        <button onclick="doLogin()">Login</button>
+        <p id="status"></p>
+    </div>
+
+    <script>
+        const client = new TeleLoginClient('http://localhost:8000');
+
+        async function doLogin() {
+            const username = document.getElementById('username').value;
+            const statusEl = document.getElementById('status');
+
+            try {
+                statusEl.textContent = 'Starting login...';
+                
+                const success = await client.login(username, (status) => {
+                    statusEl.textContent = `Status: ${status}`;
+                });
+
+                if (success) {
+                    statusEl.textContent = '✓ Login successful!';
+                } else {
+                    statusEl.textContent = '✗ Login failed';
+                }
+            } catch (error) {
+                statusEl.textContent = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>
