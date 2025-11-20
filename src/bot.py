@@ -35,6 +35,11 @@ class TeleLoginBot:
     def run(self):
         """Start the bot"""
         self.app.add_handler(CommandHandler("start", self.start_command))
+        
+        # Initialize database before starting
+        import asyncio
+        asyncio.run(self.db.init_db())
+        
         self.app.run_polling()
 
 if __name__ == "__main__":
