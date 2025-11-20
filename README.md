@@ -25,7 +25,7 @@ Simple, secure, and designed to be easily integrated into any application.
 - **Telegram push notification login confirmation** - No popups or widgets required
 - **Privacy-focused** - No sensitive data collected (only Telegram ID)
 - **Modern Python backend** - Built with FastAPI
-- **Flexible database support** - SQLite (default) or PostgreSQL
+- **Database support** - SQLite (default)
 - **Extensible and open-source** - Easy to customize and integrate
 
 ---
@@ -34,7 +34,7 @@ Simple, secure, and designed to be easily integrated into any application.
 
 - Python 3.10+
 - Telegram Bot Token (from BotFather)
-- SQLite (default) or PostgreSQL
+- SQLite
 
 ---
 
@@ -47,60 +47,67 @@ telelogin/
 │   ├─ app.py                  # Backend API entrypoint
 │   ├─ bot.py                  # Telegram bot
 │   ├─ config.py               # Configuration management
+│   │
 │   ├─ database/
 │   │     ├─ __init__.py
 │   │     ├─ base.py           # Abstract interface (CRUD users)
-│   │     ├─ sqlite.py         # SQLite implementation
-│   │     └─ postgres.py       # PostgreSQL implementation
+│   │     └─ sqlite.py         # SQLite implementation
 │   │
 │   ├─ models/
+│   │     ├─ __init__.py
 │   │     ├─ user.py           # User model definition
-│   │     └─ token.py          # Link token management
+│   │     └─ token.py          # Token and login request models
 │   │
 │   ├─ services/
+│   │     ├─ __init__.py
 │   │     ├─ auth_service.py   # Login logic + bot notification
 │   │     ├─ user_service.py   # User profile functions
 │   │     └─ token_service.py  # Token management
 │   │
 │   ├─ utils/
-│   │     ├─ crypto.py         # Token signing, hashing, etc.
-│   │     └─ logger.py
+│   │     ├─ __init__.py
+│   │     ├─ crypto.py         # Token signing, hashing, JWT
+│   │     └─ logger.py         # Logging configuration
 │   │
 │   └─ web/
+│        ├─ __init__.py
 │        ├─ routes.py          # API definition (FastAPI)
 │        ├─ schemas.py         # Pydantic schemas
-│        └─ templates/         # Optional minimal web interface
+│        └─ templates/
+│              └─ index.html   # Minimal web interface
 │
 ├─ tests/
+│   ├─ __init__.py
 │   ├─ test_auth.py
 │   ├─ test_bot.py
 │   ├─ test_database_sqlite.py
 │   └─ fixtures/
-│
-├─ db/
-│   ├─ schema.sql              # Database schema
-│   └─ migrations/             # Future evolutions
+│         └─ __init__.py
 │
 ├─ docs/
-│   ├─ README.md
 │   ├─ API_REFERENCE.md
-│   ├─ FLOW_DIAGRAM.png
-│   ├─ SECURITY.md
-│   └─ DEPLOYMENT.md
+│   ├─ DATABASE.md
+│   ├─ DEPLOYMENT.md
+│   ├─ FLOW_OVERVIEW.md
+│   └─ SECURITY.md
 │
 ├─ examples/
 │   ├─ python_client/
-│   ├─ curl_examples.md
-│   └─ js_client/
+│   │     ├─ __init__.py
+│   │     └─ telelogin_client.py
+│   ├─ js_client/
+│   │     ├─ telelogin.js
+│   │     └─ example.html
+│   └─ curl_examples.md
 │
 ├─ docker/
 │   ├─ Dockerfile              # Backend build
-│   ├─ docker-compose.yml      # Services (API + DB + bot)
-│   └─ env.example
+│   ├─ docker-compose.yml      # Services (API + bot)
+│   └─ env.example             # Docker environment variables
 │
-├─ .env.example                # Environment variables (BOT_TOKEN, DB_URL…)
+├─ .env.example                # Environment variables
+├─ .gitignore                  # Git ignore rules
 ├─ requirements.txt            # Python dependencies
-├─ pyproject.toml              # Optional
 ├─ LICENSE
 └─ README.md
 ```
