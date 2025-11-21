@@ -97,13 +97,13 @@ class AuthService:
             await self.db.update_login_status(login_id, "denied")
             return None
         
-        # Update status to approved
-        await self.db.update_login_status(login_id, "approved", access_token)
-        
         # Generate session token
         access_token = create_access_token(
             data={"sub": user.username, "user_id": user.id}
         )
+        
+        # Update status to approved with token
+        await self.db.update_login_status(login_id, "approved", access_token)
         
         return {
             "status": "authenticated",

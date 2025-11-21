@@ -5,37 +5,177 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TeleLogin Example</title>
     <script src="telelogin.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .section {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        input {
+            padding: 10px;
+            width: 300px;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #0088cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #006699;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            min-height: 20px;
+        }
+        .success {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .error {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .link {
+            word-break: break-all;
+            background-color: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .link a {
+            color: #0088cc;
+        }
+    </style>
 </head>
 <body>
-    <h1>TeleLogin JavaScript Example</h1>
-    
-    <div id="app">
-        <input type="text" id="username" placeholder="Enter username">
+    <h1>🔐 TeleLogin Example</h1>
+    <p>Telegram-based authentication demo</p>
+
+    <!-- Registration Section -->
+    <div class="section">
+        <h2>📝 Registration</h2>
+        <p>Create a new account and link it to your Telegram</p>
+        <input type="text" id="registerUsername" placeholder="Choose a username">
+        <button onclick="doRegister()">Register</button>
+        <div id="registerStatus"></div>
+    </div>
+
+    <!-- Login Section -->
+    <div class="section">
+        <h2>🔑 Login</h2>
+        <p>Login using your Telegram account</p>
+        <input type="text" id="loginUsername" placeholder="Enter username">
         <button onclick="doLogin()">Login</button>
-        <p id="status"></p>
+        <div id="loginStatus"></div>
+    </div>
+
+    <!-- Session Info -->
+    <div class="section">
+        <h2>ℹ️ Session Info</h2>
+        <p id="sessionInfo">Not authenticated</p>
+        <button onclick="doLogout()" id="logoutBtn" style="display: none;">Logout</button>
     </div>
 
     <script>
         const client = new TeleLoginClient('http://77.37.96.5:8010');
 
-        async function doLogin() {
-            const username = document.getElementById('username').value;
-            const statusEl = document.getElementById('status');
+        // Update session info on page load
+        updateSessionInfo();
+
+        async function doRegister() {
+            const username = document.getElementById('registerUsername').value;
+            const statusEl = document.getElementById('registerStatus');
+
+            if (!username || username.trim().length < 3) {
+                statusEl.innerHTML = '<p class="error">Username must be at least 3 characters</p>';
+                return;
+            }
 
             try {
-                statusEl.textContent = 'Starting login...';
+                statusEl.innerHTML = '<p>Registering user...</p>';
                 
-                const success = await client.login(username, (status) => {
-                    statusEl.textContent = `Status: ${status}`;
+                const link = await client.register(username);
+                
+                statusEl.innerHTML = `
+                    <p class="success">✓ Registration successful!</p>
+                    <p>Click the link below to link your Telegram account:</p>
+                    <div class="link">
+                        <a href="${link}" target="_blank">${link}</a>
+                    </div>
+                    <p><small>Click the link, then press START in the Telegram bot</small></p>
+                `;
+            } catch (error) {
+                statusEl.innerHTML = `<p class="error">✗ Registration failed: ${error.message}</p>`;
+            }
+        }
+
+        async function doLogin() {
+            const username = document.getElementById('loginUsername').value;
+            const statusEl = document.getElementById('loginStatus');
+
+            if (!username || username.trim().length < 3) {
+                statusEl.innerHTML = '<p class="error">Please enter a username</p>';
+                return;
+            }
+
+            try {
+                statusEl.innerHTML = '<p>Starting login...</p>';
+                
+                const result = await client.login(username, (status) => {
+                    statusEl.innerHTML = `<p>Status: ${status}...</p>`;
                 });
 
-                if (success) {
-                    statusEl.textContent = '✓ Login successful!';
+                if (result.success) {
+                    statusEl.innerHTML = '<p class="success">✓ Login successful!</p>';
+                    updateSessionInfo();
                 } else {
-                    statusEl.textContent = '✗ Login failed';
+                    statusEl.innerHTML = `<p class="error">✗ Login ${result.status}</p>`;
                 }
             } catch (error) {
-                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.innerHTML = `<p class="error">✗ Error: ${error.message}</p>`;
+            }
+        }
+
+        function doLogout() {
+            client.logout();
+            updateSessionInfo();
+            document.getElementById('loginStatus').innerHTML = '<p>Logged out</p>';
+        }
+
+        function updateSessionInfo() {
+            const sessionInfoEl = document.getElementById('sessionInfo');
+            const logoutBtn = document.getElementById('logoutBtn');
+
+            if (client.isAuthenticated()) {
+                const token = client.getToken();
+                sessionInfoEl.innerHTML = `
+                    <p class="success">✓ Authenticated</p>
+                    <p><small>Token: ${token.substring(0, 50)}...</small></p>
+                `;
+                logoutBtn.style.display = 'inline-block';
+            } else {
+                sessionInfoEl.innerHTML = '<p>Not authenticated</p>';
+                logoutBtn.style.display = 'none';
             }
         }
     </script>
