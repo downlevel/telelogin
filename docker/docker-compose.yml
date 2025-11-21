@@ -10,6 +10,7 @@ services:
       - "${API_PORT:-8000}:8000"
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_USERNAME=${BOT_USERNAME:-YourBot}
       - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=${DEBUG:-false}
@@ -27,6 +28,7 @@ services:
     command: ["python", "-m", "src.bot"]
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_USERNAME=${BOT_USERNAME:-YourBot}
       - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
       - SECRET_KEY=${SECRET_KEY}
     volumes:

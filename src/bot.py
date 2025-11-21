@@ -21,6 +21,9 @@ class TeleLoginBot:
         self.token_service = TokenService()
         self.api_base_url = f"http://api:{settings.API_PORT if hasattr(settings, 'API_PORT') else 8000}"
         
+        # Debug: print bot username
+        print(f"INFO: Bot username configured as: {settings.BOT_USERNAME}")
+        
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command with registration token"""
         # Debug logging
