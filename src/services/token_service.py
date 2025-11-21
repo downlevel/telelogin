@@ -22,7 +22,9 @@ class TokenService:
         Generate a short registration token for Telegram deep links
         Returns the short token (not JWT) to fit in Telegram URL limits
         """
-        token = secrets.token_urlsafe(32)
+        #token = secrets.token_urlsafe(32)
+        #generate simple string token 12 characters long
+        token = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(12))
         expires_at = datetime.now() + timedelta(minutes=expires_in_minutes)
         
         # Store token metadata
