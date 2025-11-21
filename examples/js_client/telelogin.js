@@ -4,7 +4,7 @@
  */
 
 class TeleLoginClient {
-  constructor(apiUrl = 'http://77.37.96.5:8010', storage = 'localStorage') {
+  constructor(apiUrl = 'http://localhost:8000', storage = 'localStorage') {
     this.apiUrl = apiUrl;
     this.storage = storage === 'sessionStorage' ? sessionStorage : localStorage;
     this.storageKey = 'telelogin_session_token';
