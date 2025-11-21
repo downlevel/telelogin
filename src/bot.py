@@ -112,11 +112,79 @@ class TeleLoginBot:
             # Welcome message
             logger.info("No args received, sending welcome message")
             sys.stderr.flush()
-            print(f"DEBUG: No args, sending welcome message")
             await update.message.reply_text(
                 "👋 Welcome to TeleLogin!\n\n"
-                "This bot is used to confirm login requests.\n"
-                "To get started, register on the TeleLogin platform and click the registration link."
+                "This bot is used to confirm login requests.\n\n"
+                "📝 To register:\n"
+                "1. Register on the TeleLogin platform\n"
+                "2. You'll receive a registration link\n"
+                "3. Click the link, then click the START button\n\n"
+                "⚠️ If you've already started this bot before, you need to:\n"
+                "- Delete this chat\n"
+                "- Click the registration link again\n"
+                "- Click the START button that appears\n\n"
+                "Or use the /link command with your registration token."
+            )
+    
+    async def link_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /link command with registration token as alternative to deep link"""
+        logger.info("/link command received")
+        sys.stderr.flush()
+        
+        if not context.args or len(context.args) == 0:
+            await update.message.reply_text(
+                "❌ Please provide your registration token:\n"
+                "/link YOUR_TOKEN_HERE"
+            )
+            return
+        
+        # Use same logic as start_command
+        token = context.args[0].strip()
+        telegram_id = update.effective_user.id
+        username = update.effective_user.username or update.effective_user.first_name
+        
+        logger.info(f"Processing /link registration for telegram_id={telegram_id}, username={username}")
+        logger.info(f"Token length={len(token)}")
+        sys.stderr.flush()
+        
+        try:
+            # Call API to link telegram account
+            logger.info("Making API call to link telegram account")
+            sys.stderr.flush()
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.api_base_url}/auth/link-telegram",
+                    json={
+                        "token": token,
+                        "telegram_id": telegram_id
+                    },
+                    timeout=10.0
+                )
+                
+                logger.info(f"API response status={response.status_code}")
+                sys.stderr.flush()
+                
+                if response.status_code == 200:
+                    await update.message.reply_text(
+                        f"✅ Registration successful, {username}!\n\n"
+                        "Your Telegram account is now linked to TeleLogin.\n"
+                        "You can now use Telegram to confirm your logins."
+                    )
+                else:
+                    data = response.json()
+                    error_detail = data.get('detail', 'Unknown error')
+                    logger.error(f"API error={error_detail}")
+                    sys.stderr.flush()
+                    await update.message.reply_text(
+                        f"❌ Registration failed: {error_detail}"
+                    )
+        except Exception as e:
+            logger.error(f"Exception during /link registration: {str(e)}", exc_info=True)
+            sys.stderr.flush()
+            await update.message.reply_text(
+                f"❌ Error during registration: {str(e)}\n"
+                "Please try again or contact support."
             )
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,6 +283,7 @@ class TeleLoginBot:
         
         # Add handlers
         self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("link", self.link_command))
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
         logger.info("Handlers registered")
         sys.stderr.flush()
