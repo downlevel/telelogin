@@ -23,11 +23,20 @@ class TeleLoginBot:
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command with registration token"""
-        if context.args:
+        # Debug logging
+        print(f"DEBUG: /start command received")
+        print(f"DEBUG: context.args = {context.args}")
+        print(f"DEBUG: Number of args = {len(context.args) if context.args else 0}")
+        
+        if context.args and len(context.args) > 0:
             # Registration flow
             token = context.args[0]
             telegram_id = update.effective_user.id
             username = update.effective_user.username or update.effective_user.first_name
+            
+            print(f"DEBUG: Processing registration for telegram_id={telegram_id}")
+            print(f"DEBUG: Token length={len(token)}")
+            print(f"DEBUG: API URL={self.api_base_url}")
             
             try:
                 # Call API to link telegram account
@@ -41,6 +50,8 @@ class TeleLoginBot:
                         timeout=10.0
                     )
                     
+                    print(f"DEBUG: API response status={response.status_code}")
+                    
                     if response.status_code == 200:
                         await update.message.reply_text(
                             f"✅ Registration successful, {username}!\n\n"
@@ -49,16 +60,22 @@ class TeleLoginBot:
                         )
                     else:
                         data = response.json()
+                        error_detail = data.get('detail', 'Unknown error')
+                        print(f"DEBUG: API error={error_detail}")
                         await update.message.reply_text(
-                            f"❌ Registration failed: {data.get('detail', 'Unknown error')}"
+                            f"❌ Registration failed: {error_detail}"
                         )
             except Exception as e:
+                print(f"DEBUG: Exception={str(e)}")
+                import traceback
+                traceback.print_exc()
                 await update.message.reply_text(
                     f"❌ Error during registration: {str(e)}\n"
                     "Please try again or contact support."
                 )
         else:
             # Welcome message
+            print(f"DEBUG: No args, sending welcome message")
             await update.message.reply_text(
                 "👋 Welcome to TeleLogin!\n\n"
                 "This bot is used to confirm login requests.\n"
