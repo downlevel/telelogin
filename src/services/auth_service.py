@@ -56,21 +56,24 @@ class AuthService:
         bot_url = f"http://bot:8001/notify-login"
         
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.post(
                     bot_url,
                     json={
                         "telegram_id": telegram_id,
                         "login_id": login_id,
                         "username": username
-                    },
-                    timeout=5.0
+                    }
                 )
                 
                 if response.status_code == 200:
                     logger.info(f"Login notification sent successfully to telegram_id={telegram_id}")
                 else:
                     logger.error(f"Failed to send notification: {response.status_code} - {response.text}")
+        except httpx.ReadTimeout:
+            logger.error(f"Timeout sending notification to telegram_id={telegram_id}. Bot may not be ready.")
+        except httpx.ConnectError:
+            logger.error(f"Cannot connect to bot service. Make sure bot is running.")
         except Exception as e:
             logger.error(f"Error sending login notification: {e}", exc_info=True)
     
