@@ -33,6 +33,7 @@ class SQLiteDatabase(DatabaseInterface):
                     id TEXT PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     status TEXT DEFAULT 'pending',
+                    session_token TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id)
                 )
@@ -119,12 +120,18 @@ class SQLiteDatabase(DatabaseInterface):
                 return dict(row)
             return None
     
-    async def update_login_status(self, login_id: str, status: str) -> bool:
-        """Update login request status"""
+    async def update_login_status(self, login_id: str, status: str, session_token: str = None) -> bool:
+        """Update login request status and optionally session token"""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE login_requests SET status = ? WHERE id = ?",
-                (status, login_id)
-            )
+            if session_token:
+                await db.execute(
+                    "UPDATE login_requests SET status = ?, session_token = ? WHERE id = ?",
+                    (status, session_token, login_id)
+                )
+            else:
+                await db.execute(
+                    "UPDATE login_requests SET status = ? WHERE id = ?",
+                    (status, login_id)
+                )
             await db.commit()
             return True

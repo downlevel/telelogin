@@ -98,7 +98,7 @@ class AuthService:
             return None
         
         # Update status to approved
-        await self.db.update_login_status(login_id, "approved")
+        await self.db.update_login_status(login_id, "approved", access_token)
         
         # Generate session token
         access_token = create_access_token(
@@ -113,10 +113,17 @@ class AuthService:
     async def get_login_status(self, login_id: str) -> Optional[Dict[str, str]]:
         """
         Get status of login request
+        Returns status and session_token if approved
         """
         login_request = await self.db.get_login_request(login_id)
         
         if not login_request:
             return None
         
-        return {"status": login_request["status"]}
+        result = {"status": login_request["status"]}
+        
+        # Include session token if login was approved
+        if login_request["status"] == "approved" and login_request.get("session_token"):
+            result["session_token"] = login_request["session_token"]
+        
+        return result

@@ -3,6 +3,7 @@ Backend API entrypoint
 FastAPI application main file
 """
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from src.web.routes import router
 from src.config import settings
@@ -23,6 +24,15 @@ app = FastAPI(
     description="Telegram-based authentication system",
     version="1.0.0",
     lifespan=lifespan
+)
+
+# Configure CORS for browser clients
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include routes
