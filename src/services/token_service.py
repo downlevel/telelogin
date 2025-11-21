@@ -19,7 +19,8 @@ class TokenService:
     
     def generate_registration_token(self, user_id: int, expires_in_minutes: int = 30) -> str:
         """
-        Generate a signed registration token
+        Generate a short registration token for Telegram deep links
+        Returns the short token (not JWT) to fit in Telegram URL limits
         """
         token = secrets.token_urlsafe(32)
         expires_at = datetime.now() + timedelta(minutes=expires_in_minutes)
@@ -32,35 +33,22 @@ class TokenService:
             "used": False
         }
         
-        # Create signed token
-        signed_token = create_signed_token({
-            "token": token,
-            "user_id": user_id,
-            "type": "registration"
-        })
-        
-        return signed_token
+        # Return the short token directly (not the signed JWT)
+        return token
     
-    def verify_registration_token(self, signed_token: str) -> Optional[int]:
+    def verify_registration_token(self, token: str) -> Optional[int]:
         """
         Verify registration token and return user_id
         """
         try:
-            payload = verify_signed_token(signed_token)
-            if not payload:
-                return None
-            
-            token = payload.get("token")
-            token_type = payload.get("type")
-            
-            if token_type != "registration":
-                logger.warning("Invalid token type")
-                return None
-            
-            # Check token metadata
+            # Check token metadata directly (token is now the short token, not JWT)
             token_data = self.tokens.get(token)
             if not token_data:
                 logger.warning("Token not found")
+                return None
+            
+            if token_data["type"] != "registration":
+                logger.warning("Invalid token type")
                 return None
             
             if token_data["used"]:
