@@ -1,16 +1,27 @@
-"""
-Telegram bot handler
+"""Telegram bot handler
 Manages registration and login confirmation via Telegram
 """
 import asyncio
+import sys
+import logging
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from src.config import settings
 from src.services.auth_service import AuthService
 from src.services.token_service import TokenService
 from src.database.sqlite import SQLiteDatabase
 from src.services.user_service import UserService
+
+# Configure logging with immediate flush
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stderr)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 class TeleLoginBot:
     def __init__(self):
@@ -24,25 +35,27 @@ class TeleLoginBot:
         self.api_base_url = f"http://api:{api_port}"
         
         # Debug: print configuration
-        print(f"INFO: Bot username configured as: {settings.BOT_USERNAME}")
-        print(f"INFO: API base URL: {self.api_base_url}")
-        print(f"INFO: Database URL: {settings.DB_URL}")
+        logger.info(f"Bot username configured as: {settings.BOT_USERNAME}")
+        logger.info(f"API base URL: {self.api_base_url}")
+        logger.info(f"Database URL: {settings.DB_URL}")
+        sys.stderr.flush()
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command with registration token"""
         # Debug logging
-        print(f"\n{'='*50}")
-        print(f"DEBUG: /start command received")
-        print(f"DEBUG: Update object: {update}")
-        print(f"DEBUG: Message text: {update.message.text if update.message else 'No message'}")
-        print(f"DEBUG: context.args = {context.args}")
-        print(f"DEBUG: Number of args = {len(context.args) if context.args else 0}")
+        logger.info("="*50)
+        logger.info("/start command received")
+        logger.info(f"Update user: {update.effective_user.id if update.effective_user else 'None'}")
+        logger.info(f"Message text: {update.message.text if update.message else 'No message'}")
+        logger.info(f"context.args = {context.args}")
+        logger.info(f"Number of args = {len(context.args) if context.args else 0}")
         
         # Additional debug - check if args are empty or contain empty strings
         if context.args:
             for i, arg in enumerate(context.args):
-                print(f"DEBUG: arg[{i}] = '{arg}' (length={len(arg)})")
-        print(f"{'='*50}\n")
+                logger.info(f"arg[{i}] = '{arg}' (length={len(arg)})")
+        logger.info("="*50)
+        sys.stderr.flush()
         
         if context.args and len(context.args) > 0 and context.args[0].strip():
             # Registration flow
@@ -50,13 +63,17 @@ class TeleLoginBot:
             telegram_id = update.effective_user.id
             username = update.effective_user.username or update.effective_user.first_name
             
-            print(f"INFO: Processing registration for telegram_id={telegram_id}, username={username}")
-            print(f"INFO: Token received (first 50 chars): {token[:50]}...")
-            print(f"INFO: Token length={len(token)}")
-            print(f"INFO: Calling API at: {self.api_base_url}/auth/link-telegram")
+            logger.info(f"Processing registration for telegram_id={telegram_id}, username={username}")
+            logger.info(f"Token received (first 50 chars): {token[:50]}...")
+            logger.info(f"Token length={len(token)}")
+            logger.info(f"Calling API at: {self.api_base_url}/auth/link-telegram")
+            sys.stderr.flush()
             
             try:
                 # Call API to link telegram account
+                logger.info("Making API call to link telegram account")
+                sys.stderr.flush()
+                
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         f"{self.api_base_url}/auth/link-telegram",
@@ -67,7 +84,8 @@ class TeleLoginBot:
                         timeout=10.0
                     )
                     
-                    print(f"DEBUG: API response status={response.status_code}")
+                    logger.info(f"API response status={response.status_code}")
+                    sys.stderr.flush()
                     
                     if response.status_code == 200:
                         await update.message.reply_text(
@@ -78,20 +96,22 @@ class TeleLoginBot:
                     else:
                         data = response.json()
                         error_detail = data.get('detail', 'Unknown error')
-                        print(f"DEBUG: API error={error_detail}")
+                        logger.error(f"API error={error_detail}")
+                        sys.stderr.flush()
                         await update.message.reply_text(
                             f"❌ Registration failed: {error_detail}"
                         )
             except Exception as e:
-                print(f"DEBUG: Exception={str(e)}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"Exception during registration: {str(e)}", exc_info=True)
+                sys.stderr.flush()
                 await update.message.reply_text(
                     f"❌ Error during registration: {str(e)}\n"
                     "Please try again or contact support."
                 )
         else:
             # Welcome message
+            logger.info("No args received, sending welcome message")
+            sys.stderr.flush()
             print(f"DEBUG: No args, sending welcome message")
             await update.message.reply_text(
                 "👋 Welcome to TeleLogin!\n\n"
@@ -153,6 +173,9 @@ class TeleLoginBot:
     
     async def send_login_notification(self, telegram_id: int, login_id: str, username: str):
         """Send login confirmation request to user"""
+        logger.info(f"Sending login notification to telegram_id={telegram_id}, login_id={login_id}")
+        sys.stderr.flush()
+        
         keyboard = [
             [
                 InlineKeyboardButton("✅ Confirm", callback_data=f"login_confirm:{login_id}"),
@@ -170,8 +193,10 @@ class TeleLoginBot:
                      f"Do you want to confirm this login?",
                 reply_markup=reply_markup
             )
+            logger.info("Login notification sent successfully")
         except Exception as e:
-            print(f"Failed to send notification: {e}")
+            logger.error(f"Failed to send notification: {e}", exc_info=True)
+        sys.stderr.flush()
     
     async def confirm_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle login confirmation callback"""
@@ -180,17 +205,27 @@ class TeleLoginBot:
     
     async def start(self):
         """Initialize and start the bot"""
+        logger.info("Initializing bot...")
+        sys.stderr.flush()
+        
         # Initialize database
         await self.db.init_db()
+        logger.info("Database initialized")
+        sys.stderr.flush()
         
         # Add handlers
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
+        logger.info("Handlers registered")
+        sys.stderr.flush()
         
         # Start polling
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()
+        
+        logger.info("Bot is now running and polling for updates...")
+        sys.stderr.flush()
         
         # Run until stopped
         await asyncio.Event().wait()
