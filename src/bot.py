@@ -19,27 +19,41 @@ class TeleLoginBot:
         self.auth_service = AuthService(self.db)
         self.user_service = UserService(self.db)
         self.token_service = TokenService()
-        self.api_base_url = f"http://api:{settings.API_PORT if hasattr(settings, 'API_PORT') else 8000}"
+        # Use 'api' hostname for Docker network communication
+        api_port = getattr(settings, 'API_PORT', 8000)
+        self.api_base_url = f"http://api:{api_port}"
         
-        # Debug: print bot username
+        # Debug: print configuration
         print(f"INFO: Bot username configured as: {settings.BOT_USERNAME}")
+        print(f"INFO: API base URL: {self.api_base_url}")
+        print(f"INFO: Database URL: {settings.DB_URL}")
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command with registration token"""
         # Debug logging
+        print(f"\n{'='*50}")
         print(f"DEBUG: /start command received")
+        print(f"DEBUG: Update object: {update}")
+        print(f"DEBUG: Message text: {update.message.text if update.message else 'No message'}")
         print(f"DEBUG: context.args = {context.args}")
         print(f"DEBUG: Number of args = {len(context.args) if context.args else 0}")
         
-        if context.args and len(context.args) > 0:
+        # Additional debug - check if args are empty or contain empty strings
+        if context.args:
+            for i, arg in enumerate(context.args):
+                print(f"DEBUG: arg[{i}] = '{arg}' (length={len(arg)})")
+        print(f"{'='*50}\n")
+        
+        if context.args and len(context.args) > 0 and context.args[0].strip():
             # Registration flow
-            token = context.args[0]
+            token = context.args[0].strip()
             telegram_id = update.effective_user.id
             username = update.effective_user.username or update.effective_user.first_name
             
-            print(f"DEBUG: Processing registration for telegram_id={telegram_id}")
-            print(f"DEBUG: Token length={len(token)}")
-            print(f"DEBUG: API URL={self.api_base_url}")
+            print(f"INFO: Processing registration for telegram_id={telegram_id}, username={username}")
+            print(f"INFO: Token received (first 50 chars): {token[:50]}...")
+            print(f"INFO: Token length={len(token)}")
+            print(f"INFO: Calling API at: {self.api_base_url}/auth/link-telegram")
             
             try:
                 # Call API to link telegram account
