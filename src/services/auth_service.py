@@ -51,13 +51,28 @@ class AuthService:
     
     async def send_login_notification(self, telegram_id: int, login_id: str, username: str):
         """
-        Send login notification via bot API endpoint
-        Note: In production, this should use a message queue or direct bot instance
+        Send login notification via bot HTTP endpoint
         """
-        # For now, we'll use the bot's send_login_notification method directly
-        # In production, consider using a webhook or message queue
-        logger.info(f"Login notification should be sent to telegram_id {telegram_id} for login_id {login_id}")
-        # TODO: Implement notification mechanism (webhook, queue, or shared bot instance)
+        bot_url = f"http://bot:8001/notify-login"
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    bot_url,
+                    json={
+                        "telegram_id": telegram_id,
+                        "login_id": login_id,
+                        "username": username
+                    },
+                    timeout=5.0
+                )
+                
+                if response.status_code == 200:
+                    logger.info(f"Login notification sent successfully to telegram_id={telegram_id}")
+                else:
+                    logger.error(f"Failed to send notification: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"Error sending login notification: {e}", exc_info=True)
     
     async def confirm_login(self, login_id: str, telegram_id: int) -> Optional[Dict[str, str]]:
         """

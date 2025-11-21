@@ -5,6 +5,7 @@ import asyncio
 import sys
 import logging
 import httpx
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from src.config import settings
@@ -33,6 +34,10 @@ class TeleLoginBot:
         # Use 'api' hostname for Docker network communication
         api_port = getattr(settings, 'API_PORT', 8000)
         self.api_base_url = f"http://api:{api_port}"
+        
+        # HTTP server for receiving notifications
+        self.web_app = web.Application()
+        self.web_app.router.add_post('/notify-login', self.handle_login_notification)
         
         # Debug: print configuration
         logger.info(f"Bot username configured as: {settings.BOT_USERNAME}")
@@ -256,8 +261,7 @@ class TeleLoginBot:
             await self.app.bot.send_message(
                 chat_id=telegram_id,
                 text=f"🔐 Login Request\n\n"
-                     f"Username: {username}\n"
-                     f"Time: {asyncio.get_event_loop().time()}\n\n"
+                     f"Username: {username}\n\n"
                      f"Do you want to confirm this login?",
                 reply_markup=reply_markup
             )
@@ -265,6 +269,27 @@ class TeleLoginBot:
         except Exception as e:
             logger.error(f"Failed to send notification: {e}", exc_info=True)
         sys.stderr.flush()
+    
+    async def handle_login_notification(self, request):
+        """Handle HTTP POST requests to send login notifications"""
+        try:
+            data = await request.json()
+            telegram_id = data.get('telegram_id')
+            login_id = data.get('login_id')
+            username = data.get('username')
+            
+            logger.info(f"Received login notification request: telegram_id={telegram_id}, login_id={login_id}")
+            
+            if not all([telegram_id, login_id, username]):
+                return web.json_response({'error': 'Missing required fields'}, status=400)
+            
+            # Send notification via Telegram
+            await self.send_login_notification(telegram_id, login_id, username)
+            
+            return web.json_response({'success': True})
+        except Exception as e:
+            logger.error(f"Error handling login notification: {e}", exc_info=True)
+            return web.json_response({'error': str(e)}, status=500)
     
     async def confirm_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle login confirmation callback"""
@@ -294,6 +319,14 @@ class TeleLoginBot:
         await self.app.updater.start_polling()
         
         logger.info("Bot is now running and polling for updates...")
+        sys.stderr.flush()
+        
+        # Start HTTP server for notifications
+        runner = web.AppRunner(self.web_app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', 8001)
+        await site.start()
+        logger.info("HTTP notification server started on port 8001")
         sys.stderr.flush()
         
         # Run until stopped
