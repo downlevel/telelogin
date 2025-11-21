@@ -44,68 +44,47 @@ Simple, secure, and designed to be easily integrated into any application.
 telelogin/
 │
 ├─ src/
-│   ├─ app.py                  # Backend API entrypoint
-│   ├─ bot.py                  # Telegram bot
-│   ├─ config.py               # Configuration management
+│   ├─ app.py                  # FastAPI backend entrypoint
+│   ├─ bot.py                  # Telegram bot with HTTP notification server
+│   ├─ config.py               # Configuration management (env variables)
 │   │
 │   ├─ database/
 │   │     ├─ __init__.py
-│   │     ├─ base.py           # Abstract interface (CRUD users)
+│   │     ├─ base.py           # Abstract database interface
 │   │     └─ sqlite.py         # SQLite implementation
 │   │
 │   ├─ models/
 │   │     ├─ __init__.py
-│   │     ├─ user.py           # User model definition
+│   │     ├─ user.py           # User dataclass
 │   │     └─ token.py          # Token and login request models
 │   │
 │   ├─ services/
 │   │     ├─ __init__.py
-│   │     ├─ auth_service.py   # Login logic + bot notification
-│   │     ├─ user_service.py   # User profile functions
-│   │     └─ token_service.py  # Token management
+│   │     ├─ auth_service.py   # Authentication logic + notifications
+│   │     ├─ user_service.py   # User management
+│   │     └─ token_service.py  # Token generation and verification
 │   │
 │   ├─ utils/
 │   │     ├─ __init__.py
-│   │     ├─ crypto.py         # Token signing, hashing, JWT
+│   │     ├─ crypto.py         # JWT signing and password hashing
 │   │     └─ logger.py         # Logging configuration
 │   │
 │   └─ web/
 │        ├─ __init__.py
-│        ├─ routes.py          # API definition (FastAPI)
-│        ├─ schemas.py         # Pydantic schemas
-│        └─ templates/
-│              └─ index.html   # Minimal web interface
-│
-├─ tests/
-│   ├─ __init__.py
-│   ├─ test_auth.py
-│   ├─ test_bot.py
-│   ├─ test_database_sqlite.py
-│   └─ fixtures/
-│         └─ __init__.py
-│
-├─ docs/
-│   ├─ API_REFERENCE.md
-│   ├─ DATABASE.md
-│   ├─ DEPLOYMENT.md
-│   ├─ FLOW_OVERVIEW.md
-│   └─ SECURITY.md
+│        ├─ routes.py          # API endpoints (FastAPI router)
+│        └─ schemas.py         # Pydantic request/response models
 │
 ├─ examples/
-│   ├─ python_client/
-│   │     ├─ __init__.py
-│   │     └─ telelogin_client.py
 │   ├─ js_client/
-│   │     ├─ telelogin.js
-│   │     └─ example.html
-│   └─ curl_examples.md
+│   │     ├─ telelogin.js      # JavaScript client library
+│   │     └─ example.html      # Browser demo page
+│   └─ curl_examples.md        # cURL examples for all endpoints
 │
 ├─ docker/
-│   ├─ Dockerfile              # Backend build
-│   ├─ docker-compose.yml      # Services (API + bot)
-│   └─ env.example             # Docker environment variables
+│   ├─ Dockerfile              # Multi-stage Docker build
+│   └─ docker-compose.yml      # Services orchestration (api + bot)
 │
-├─ .env.example                # Environment variables
+├─ .env.example                # Environment variables template
 ├─ .gitignore                  # Git ignore rules
 ├─ requirements.txt            # Python dependencies
 ├─ LICENSE
@@ -261,32 +240,38 @@ Allows the client interface to verify the login outcome.
 
 ### Table: `users`
 
-| Field        | Type         | Notes                    |
-|--------------|--------------|--------------------------|
-| id           | INTEGER PK   |                          |
-| username     | TEXT UNIQUE  | Local identifier         |
-| telegram_id  | INTEGER      | Telegram ID              |
-| created_at   | DATETIME     |                          |
-| linked_at    | DATETIME     |                          |
+| Field        | Type         | Notes                                  |
+|--------------|--------------|----------------------------------------|
+| id           | INTEGER      | Primary Key (auto-increment)           |
+| username     | TEXT         | Unique, local application username     |
+| telegram_id  | INTEGER      | Telegram user ID (nullable until linked)|
+| created_at   | DATETIME     | User registration timestamp            |
+| linked_at    | DATETIME     | Telegram account link timestamp        |
+
+**Indexes:**
+- `idx_users_username` on `username`
+- `idx_users_telegram_id` on `telegram_id`
 
 ---
 
 ### Table: `login_requests`
 
-| Field        | Type         | Notes                                 |
-|--------------|--------------|---------------------------------------|
-| id           | UUID PK      | Login request identifier              |
-| user_id      | INT          | FK users.id                           |
-| status       | TEXT         | pending / approved / denied / expired |
-| created_at   | DATETIME     |                                       |
+| Field         | Type         | Notes                                    |
+|---------------|--------------|------------------------------------------|
+| id            | TEXT         | Primary Key (UUID format)                |
+| user_id       | INTEGER      | Foreign Key → users.id                   |
+| status        | TEXT         | pending / approved / denied / expired    |
+| session_token | TEXT         | JWT token (stored when approved)         |
+| created_at    | DATETIME     | Login request creation timestamp         |
 
----
+**Indexes:**
+- `idx_login_requests_user_id` on `user_id`
 
-### Recommended Indexes
-
-- `users(username)`
-- `users(telegram_id)`
-- `login_requests(user_id)`
+**Status values:**
+- `pending` - Waiting for user confirmation via Telegram
+- `approved` - User confirmed login, session token generated
+- `denied` - User explicitly denied the login request
+- `expired` - Login request timed out
 
 ---
 
