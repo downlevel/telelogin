@@ -292,6 +292,11 @@ are present in both environment templates and Docker Compose.
 
 ## Verification
 
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push to main and every pull
+request: Ruff, the test suite on Python 3.11 and 3.12 (including the Node client
+simulation and a warnings-as-errors pass), a compose validation, the image build and an
+API smoke test (`/health`, `/auth/me` → 401).
+
 ```bash
 .venv/bin/python -m pytest -q && .venv/bin/ruff check src tests && .venv/bin/python -W error::DeprecationWarning -m pytest -q
 ```
