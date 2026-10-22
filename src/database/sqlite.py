@@ -94,6 +94,9 @@ class SQLiteDatabase(DatabaseInterface):
             await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users(public_id)")
             await db.execute("CREATE TABLE IF NOT EXISTS apps (id TEXT PRIMARY KEY, name TEXT NOT NULL, access_policy TEXT NOT NULL DEFAULT 'allowlist' CHECK(access_policy IN ('allowlist','all')), secret_hash TEXT, redirect_uris TEXT NOT NULL DEFAULT '[]', origins TEXT NOT NULL DEFAULT '[]', created_at REAL NOT NULL)")
             await db.execute("CREATE TABLE IF NOT EXISTS app_users (app_id TEXT NOT NULL REFERENCES apps(id), user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(app_id,user_id))")
+            await db.execute("CREATE TABLE IF NOT EXISTS oidc_codes (code_hash TEXT PRIMARY KEY, app_id TEXT, user_id INTEGER, session_id TEXT, redirect_uri TEXT, scope TEXT, nonce TEXT, code_challenge TEXT, auth_time REAL, expires_at REAL, used_at REAL)")
+            await db.execute("CREATE TABLE IF NOT EXISTS oidc_tokens (token_hash TEXT PRIMARY KEY, app_id TEXT, user_id INTEGER, code_hash TEXT, scope TEXT, expires_at REAL, revoked_at REAL)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_oidc_tokens_code ON oidc_tokens(code_hash)")
             await db.commit()
 
     async def create_user(self, username: str) -> User:
@@ -302,7 +305,7 @@ class SQLiteDatabase(DatabaseInterface):
                     return None
                 await db.execute("UPDATE sessions SET revoked_at=COALESCE(revoked_at,?) WHERE user_id=?" + (' AND id=?' if session_id is not None else ''), (now,uid,session_id) if session_id is not None else (now,uid))
             elif action == 'delete':
-                for table in ('app_users','sessions','registration_tokens','login_requests'):
+                for table in ('oidc_tokens','oidc_codes','app_users','sessions','registration_tokens','login_requests'):
                     await db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
                 await db.execute("DELETE FROM users WHERE id=?", (uid,))
             await db.commit()
@@ -312,6 +315,8 @@ class SQLiteDatabase(DatabaseInterface):
         cutoff = time.time() - retention_seconds
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("BEGIN IMMEDIATE")
+            await db.execute("DELETE FROM oidc_codes WHERE expires_at<?", (time.time() - settings.OIDC_TOKEN_TTL_SECONDS,))
+            await db.execute("DELETE FROM oidc_tokens WHERE expires_at<?", (time.time(),))
             await db.execute("DELETE FROM login_requests WHERE CAST(strftime('%s',created_at) AS REAL)<?", (cutoff,))
             await db.execute("DELETE FROM sessions WHERE expires_at<? OR revoked_at<?", (cutoff,cutoff))
             await db.execute("UPDATE sessions SET ip=NULL,user_agent=NULL WHERE created_at<?", (cutoff,))

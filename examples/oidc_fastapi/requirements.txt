@@ -1,0 +1,6 @@
+fastapi==0.159.1
+uvicorn[standard]==0.54.0
+authlib==1.8.0
+httpx2==2.13.1
+cryptography==50.0.2
+itsdangerous==2.2.0

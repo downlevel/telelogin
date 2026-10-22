@@ -135,11 +135,13 @@ Shell access is admin access. `gen-secrets` needs no `.env` or database and prin
 `SECRET_KEY` and `INTERNAL_API_KEY` assignments. Never share them.
 
 ```text
-app add ID --name NAME [--policy allowlist|all]
+app add ID --name NAME [--policy allowlist|all] [--redirect-uri URI ...]
 app list | app show ID | app remove ID
 app policy ID allowlist|all
 app allow ID USERNAME | app disallow ID USERNAME
 app origin add|remove ID ORIGIN
+app redirect-uri add|remove ID URI
+app rotate-secret ID
 user invite USERNAME | user list | user remove USERNAME
 gen-secrets
 ```
@@ -149,7 +151,74 @@ as unlink. `app remove` also removes its allowlist. No stored secret is printed.
 
 ## Mode 1: OpenID Connect
 
-Coming in a later release. This build has no OIDC endpoints or client credentials.
+Use Mode 1 for apps on unrelated domains or apps with a standard OIDC client library.
+The operator trusts every registered app; there is no consent screen.
+
+1. Register a confidential client and its exact callback URL:
+
+   ```sh
+   python -m src.admin app add myapp --name "My App" --redirect-uri https://app.example.com/callback
+   python -m src.admin app allow myapp alice
+   ```
+
+   Save the printed client secret: it is shown once and only its SHA-256 hash is stored.
+   Repeat `--redirect-uri` for additional callback URLs. Alternatively use
+   `app redirect-uri add myapp URI`; adding the first URI generates a secret if needed.
+   `app rotate-secret myapp` replaces the secret immediately; update the app configuration.
+   Redirect URIs must use HTTPS, except HTTP on localhost/127.0.0.1 for development; fragments
+   and credentials are forbidden. Matching is exact, including path and query.
+   To admit every linked user instead, run `app policy myapp all`.
+2. Configure your OIDC library:
+
+   | Setting | Value |
+   |---|---|
+   | Issuer | Your `PUBLIC_URL`, e.g. `https://auth.example.com` |
+   | Discovery URL | `PUBLIC_URL/.well-known/openid-configuration` |
+   | Client ID | `myapp` |
+   | Client secret | The value printed by the CLI |
+   | Scopes | `openid profile` |
+   | Redirect URI | The exact registered callback URL |
+   | Flow | Authorization code; PKCE S256 recommended |
+   | Client authentication | `client_secret_basic` or `client_secret_post` |
+
+   With a path prefix, issuer is e.g. `https://example.com/telelogin` and discovery is
+   `https://example.com/telelogin/.well-known/openid-configuration`. Keep that prefix in all URLs.
+3. Use the [Authlib FastAPI example](../examples/oidc_fastapi/app.py): install its
+   `requirements.txt`, set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and a random
+   `SESSION_SECRET`, then run `uvicorn app:app --host 127.0.0.1 --port 9000` from that directory.
+   Register the public `/callback` URL first. Put it behind an HTTPS proxy; for plain HTTP
+   local development only, set `COOKIE_SECURE=false`. The example stores identity in a signed
+   session cookie and its logout clears that app session. It does not store bearer tokens in
+   the cookie. A typical Authlib registration is:
+
+   ```python
+   oauth.register(
+       "telelogin", client_id=client_id, client_secret=client_secret,
+       server_metadata_url=issuer + "/.well-known/openid-configuration",
+       client_kwargs={"scope": "openid profile", "code_challenge_method": "S256"},
+   )
+   ```
+
+The stable UUID `sub` identifies the user. `profile` adds `preferred_username` and `name`.
+ID tokens are signed with RS256 and a public key from `/jwks.json`; access tokens are opaque,
+last 10 minutes by default, and work only at `/userinfo`. Raw API HS256 tokens and OIDC tokens
+are mutually unusable. Codes are single use; replay revokes the access tokens issued from that
+code. Removing app access also prevents `/userinfo` and code redemption.
+
+Only confidential clients with a backend and a secret are supported. Browser-only SPAs should
+use Mode 2 or a small backend. There are no OIDC refresh tokens, dynamic registration, consent
+screens, RP-initiated logout, or back-channel logout. `max_age`, `claims`, and `ui_locales` are
+unsupported and ignored. `prompt=none` fails with `login_required` without a browser session;
+`prompt=login` forces a new Telegram confirmation. Otherwise the browser session is reused.
+Revoking a TeleLogin browser session blocks new codes and unredeemed codes. It does not end
+sessions that an OIDC app has created itself; already issued OIDC access tokens last until expiry
+unless replayed or app access is removed. Unlink and user/app removal delete associated grants.
+
+The API generates `OIDC_KEY_FILE` on first startup with mode 0600. Persist this file alongside
+SQLite data and keep it private. For manual key rotation: stop the API, back up the old key
+securely, remove the key file, and restart to generate a new one. Existing ID tokens stop
+validating after clients refresh their JWKS cache; coordinate app reauthentication and cache
+refresh with the rotation. Automated rotation and overlapping signing keys are unsupported.
 
 ## Advanced: custom UI with the raw API
 

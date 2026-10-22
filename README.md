@@ -4,7 +4,7 @@ TeleLogin also protects apps with **forward auth**: one Telegram confirmation cr
 browser session, and nginx, Traefik or Caddy supplies the app's verified identity. Per-app allowlists
 (default) or `all` policies control access. See [Integration guide](docs/INTEGRATION.md) for both
 shared-host/path-prefix and sibling-subdomain deployments, proxy snippets and the operator CLI.
-OpenID Connect is coming in a later release.
+OpenID Connect supports confidential clients with authorization code flow and PKCE S256.
 
 **Deployment change:** the development Compose API port now binds to `127.0.0.1` only. Configure a
 local reverse proxy, or use a private Docker network with no published API port. `GET /` now serves
@@ -34,6 +34,7 @@ Telegram login confirmation using FastAPI, a Telegram bot and SQLite. Python 3.1
 
 ## Features
 
+- OpenID Connect discovery, RS256 ID tokens, opaque access tokens, and shared browser SSO.
 - Telegram deep-link registration, number matching and Deny login buttons.
 - SQLite persistence with atomic registration linking and login transitions.
 - Expiring registration tokens and login requests, with one-time access/refresh token delivery.
@@ -128,6 +129,9 @@ Both templates declare all supported variables. Required secrets must be supplie
 | REFRESH_TOKEN_TTL_DAYS | 30; fixed session lifetime from creation |
 | LOGIN_HISTORY_RETENTION_DAYS | 30; login history and session metadata retention |
 | PURGE_INTERVAL_SECONDS | 3600; cleanup interval, also run at startup |
+| OIDC_KEY_FILE | data/oidc-signing-key.pem; persistent private RSA signing key |
+| OIDC_CODE_TTL_SECONDS | 60; authorization code lifetime |
+| OIDC_TOKEN_TTL_SECONDS | 600; access token and ID token lifetime |
 | DEBUG | false |
 | CORS_ORIGINS | [] (JSON list) |
 | LOGIN_REQUEST_TTL_SECONDS | 120 |
@@ -173,6 +177,11 @@ Both templates declare all supported variables. Required secrets must be supplie
 | GET /login | Hosted browser login; optional app and rd parameters |
 | GET /health | 200 {"status":"ok"} after a database query |
 | POST /register | {"username":"alice"}; returns Telegram registration link; duplicate username 400 |
+| GET /.well-known/openid-configuration | OIDC discovery |
+| GET /jwks.json | Public RSA signing key |
+| GET /authorize | Authorization code flow |
+| POST /token | Form-encoded code redemption with client authentication |
+| GET, POST /userinfo | Opaque Bearer token identity |
 | POST /auth/link-telegram | Internal: {"token":"...","telegram_id":42}; atomic single-use registration link |
 | POST /auth/start-login | {"username":"alice"}; always returns pending login_id and verification_code unless rate limited |
 | POST /auth/confirm-login | Internal: {"login_id":"...","telegram_id":42,"verification_code":42}; owner approves pending unexpired login; returns only {"status":"authenticated"}, wrong code denies with 400 |
@@ -348,3 +357,9 @@ otherwise that simulation is skipped.
 
 TeleLogin is distributed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
 for the full terms.
+
+## OpenID Connect integration
+
+TeleLogin supports confidential OIDC clients with authorization code flow, PKCE S256, RS256 ID
+tokens, and shared browser SSO. See [the integration guide](docs/INTEGRATION.md#mode-1-openid-connect)
+and [the Authlib example](examples/oidc_fastapi/app.py).
