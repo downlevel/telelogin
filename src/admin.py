@@ -1,4 +1,5 @@
 """Operator CLI. Shell access is administrative access."""
+import hashlib
 import argparse
 import asyncio
 import json
@@ -18,6 +19,13 @@ def parser():
     add.add_argument('id')
     add.add_argument('--name', required=True)
     add.add_argument('--policy', choices=['allowlist', 'all'], default='allowlist')
+    add.add_argument('--redirect-uri', action='append', default=[])
+    apps.add_parser('rotate-secret').add_argument('id')
+    redirects = apps.add_parser('redirect-uri').add_subparsers(dest='operation', required=True)
+    for action in ('add', 'remove'):
+        a = redirects.add_parser(action)
+        a.add_argument('id')
+        a.add_argument('uri')
     apps.add_parser('list')
     for action in ('show', 'remove'):
         apps.add_parser(action).add_argument('id')
@@ -55,6 +63,17 @@ def validated_origin(value):
     return normalized
 
 
+def validated_redirect(value):
+    parsed = urlsplit(value)
+    if (not parsed.hostname or parsed.username or parsed.password or parsed.fragment
+            or "#" in value or "\\" in value or any(ord(c) <= 32 or ord(c) == 127 for c in value)
+            or parsed.scheme not in ('https', 'http')
+            or (parsed.scheme == 'http' and parsed.hostname not in ('localhost', '127.0.0.1'))):
+        raise ValueError('Redirect URI must be absolute HTTPS (HTTP only on localhost/127.0.0.1), without fragment or credentials')
+    parsed.port
+    return value
+
+
 async def run(args):
     import aiosqlite
     from src.database.sqlite import SQLiteDatabase
@@ -83,12 +102,13 @@ async def run(args):
             user = await (await conn.execute('SELECT id FROM users WHERE username=?', (args.username,))).fetchone()
             if not user:
                 raise ValueError('Unknown username')
-            for table in ('app_users', 'sessions', 'registration_tokens', 'login_requests'):
+            for table in ('oidc_tokens', 'oidc_codes', 'app_users', 'sessions', 'registration_tokens', 'login_requests'):
                 await conn.execute(f'DELETE FROM {table} WHERE user_id=?', (user['id'],))
             await conn.execute('DELETE FROM users WHERE id=?', (user['id'],))
             await conn.commit()
         print('User removed')
         return
+    secret = None
     async with aiosqlite.connect(db.db_path) as conn:
         conn.row_factory = aiosqlite.Row
         await conn.execute('BEGIN IMMEDIATE')
@@ -99,7 +119,9 @@ async def run(args):
         if args.action == 'add':
             if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', args.id):
                 raise ValueError('App id must match ^[a-z0-9][a-z0-9-]{0,39}$')
-            await conn.execute('INSERT INTO apps(id,name,access_policy,created_at) VALUES (?,?,?,?)', (args.id, args.name, args.policy, time.time()))
+            uris = [validated_redirect(uri) for uri in args.redirect_uri]
+            secret = secrets.token_urlsafe(32) if uris else None
+            await conn.execute('INSERT INTO apps(id,name,access_policy,created_at,redirect_uris,secret_hash) VALUES (?,?,?,?,?,?)', (args.id, args.name, args.policy, time.time(), json.dumps(uris), hashlib.sha256(secret.encode()).hexdigest() if secret else None))
         else:
             app = await (await conn.execute('SELECT * FROM apps WHERE id=?', (args.id,))).fetchone()
             if not app:
@@ -111,8 +133,21 @@ async def run(args):
                 print(json.dumps(data, ensure_ascii=False))
                 return
             if args.action == 'remove':
-                await conn.execute('DELETE FROM app_users WHERE app_id=?', (args.id,))
+                for table in ('oidc_tokens', 'oidc_codes', 'app_users'):
+                    await conn.execute(f'DELETE FROM {table} WHERE app_id=?', (args.id,))
                 await conn.execute('DELETE FROM apps WHERE id=?', (args.id,))
+            elif args.action in ('rotate-secret', 'redirect-uri'):
+                if args.action == 'redirect-uri':
+                    value = validated_redirect(args.uri)
+                    uris = json.loads(app['redirect_uris'])
+                    if args.operation == 'add' and value not in uris:
+                        uris.append(value)
+                    if args.operation == 'remove' and value in uris:
+                        uris.remove(value)
+                    await conn.execute('UPDATE apps SET redirect_uris=? WHERE id=?', (json.dumps(uris), args.id))
+                if args.action == 'rotate-secret' or (args.operation == 'add' and not app['secret_hash']):
+                    secret = secrets.token_urlsafe(32)
+                    await conn.execute('UPDATE apps SET secret_hash=? WHERE id=?', (hashlib.sha256(secret.encode()).hexdigest(), args.id))
             elif args.action == 'policy':
                 await conn.execute('UPDATE apps SET access_policy=? WHERE id=?', (args.policy, args.id))
             elif args.action in ('allow', 'disallow'):
@@ -135,7 +170,7 @@ async def run(args):
                     origins.remove(value)
                 await conn.execute('UPDATE apps SET origins=? WHERE id=?', (json.dumps(origins), args.id))
         await conn.commit()
-    print('OK')
+    print('Client secret: ' + secret if secret else 'OK')
 
 
 def main():

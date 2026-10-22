@@ -222,3 +222,8 @@ __marimo__/
 
 # Disposable real-proxy test configuration and cookie jars
 tests/e2e/.run-*/
+
+# Runtime data and private keys; retain disposable e2e certificate fixtures.
+/data/
+*.pem
+!tests/e2e/certs/*.pem

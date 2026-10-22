@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
 from src.database.sqlite import SQLiteDatabase
 from src.web.routes import router
+from src.web.oidc import router as oidc_router, load_key
 from src.web.sso import router as sso_router
 
 
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize database tables
     app.state.db = SQLiteDatabase()
     await app.state.db.init_db()
+    app.state.oidc_key = load_key(settings.OIDC_KEY_FILE)
     app.state.limiter = RateLimiter()
     app.state.login_html = Path(__file__).with_name("web").joinpath("templates/index.html").read_text(encoding="utf-8")
     async def purge_once():
@@ -77,6 +79,7 @@ app.add_middleware(
 # Include routes
 app.include_router(router)
 app.include_router(sso_router)
+app.include_router(oidc_router)
 
 @app.get("/health")
 async def health(db=Depends(get_db)):

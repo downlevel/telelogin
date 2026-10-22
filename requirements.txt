@@ -9,3 +9,4 @@ aiosqlite==0.22.1
 PyJWT==2.15.1
 
 tldextract==5.4.0
+cryptography==50.0.2

@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     LOGIN_HISTORY_RETENTION_DAYS: int = Field(default=30, gt=0)
     PURGE_INTERVAL_SECONDS: float = Field(default=3600, gt=0)
 
+    OIDC_KEY_FILE: str = "data/oidc-signing-key.pem"
+    OIDC_CODE_TTL_SECONDS: int = Field(default=60, gt=0)
+    OIDC_TOKEN_TTL_SECONDS: int = Field(default=600, gt=0)
+
     PUBLIC_URL: str = "http://localhost:8000"
     SSO_COOKIE_NAME: str = "tl_sso"
     SSO_COOKIE_SECURE: bool = True
