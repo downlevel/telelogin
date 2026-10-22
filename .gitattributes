@@ -1,1 +1,7 @@
 docker/entrypoint.sh text eol=lf
+tests/e2e/*.sh text eol=lf
+examples/nginx/*.conf text eol=lf
+examples/traefik/*.yml text eol=lf
+examples/caddy/* text eol=lf
+tests/e2e/*.yml text eol=lf
+tests/e2e/certs/*.pem text eol=lf

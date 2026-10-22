@@ -41,8 +41,9 @@ async def test_lifespan_health_login(tmp_path, monkeypatch):
                 assert (await client.get('/health')).json() == {'status': 'ok'}
                 response = await client.get('/login')
                 assert response.status_code == 200 and 'text/html' in response.headers['content-type']
-                assert '/auth/status' in response.text and 'setInterval' not in response.text
-                assert (await client.get('/')).json()['message'] == 'TeleLogin API'
+                assert "request('sso/complete'" in response.text and 'setInterval' not in response.text
+                assert "request('/sso/" not in response.text
+                assert 'Sign in' in (await client.get('/')).text
     finally:
         app.state._state.clear()
         app.state._state.update(previous_state)

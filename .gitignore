@@ -219,3 +219,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Disposable real-proxy test configuration and cookie jars
+tests/e2e/.run-*/

@@ -80,19 +80,34 @@ class SQLiteDatabase(DatabaseInterface):
 
             await db.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), refresh_hash TEXT UNIQUE NOT NULL, previous_refresh_hash TEXT, created_at REAL NOT NULL, expires_at REAL NOT NULL, last_used_at REAL, revoked_at REAL, ip TEXT, user_agent TEXT)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
+            for table, additions in {
+                'users': [('public_id', 'TEXT')],
+                'login_requests': [('purpose', "TEXT NOT NULL DEFAULT 'api'"), ('app_id', 'TEXT'), ('return_to', 'TEXT')],
+                'sessions': [('kind', "TEXT NOT NULL DEFAULT 'api'")],
+            }.items():
+                cols = {r[1] for r in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()}
+                for name, kind in additions:
+                    if name not in cols:
+                        await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+            for row in await (await db.execute("SELECT id FROM users WHERE public_id IS NULL")).fetchall():
+                await db.execute("UPDATE users SET public_id=? WHERE id=?", (str(uuid.uuid4()), row[0]))
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users(public_id)")
+            await db.execute("CREATE TABLE IF NOT EXISTS apps (id TEXT PRIMARY KEY, name TEXT NOT NULL, access_policy TEXT NOT NULL DEFAULT 'allowlist' CHECK(access_policy IN ('allowlist','all')), secret_hash TEXT, redirect_uris TEXT NOT NULL DEFAULT '[]', origins TEXT NOT NULL DEFAULT '[]', created_at REAL NOT NULL)")
+            await db.execute("CREATE TABLE IF NOT EXISTS app_users (app_id TEXT NOT NULL REFERENCES apps(id), user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(app_id,user_id))")
             await db.commit()
 
     async def create_user(self, username: str) -> User:
         """Create a new user"""
         async with aiosqlite.connect(self.db_path) as db:
+            public_id = str(uuid.uuid4())
             cursor = await db.execute(
-                "INSERT INTO users (username) VALUES (?)",
-                (username,)
+                "INSERT INTO users (username, public_id) VALUES (?, ?)",
+                (username, public_id)
             )
             await db.commit()
             user_id = cursor.lastrowid
 
-            return User(id=user_id, username=username)
+            return User(id=user_id, username=username, public_id=public_id)
 
     async def get_user_by_username(self, username: str) -> User | None:
         """Get user by username"""
@@ -169,7 +184,7 @@ class SQLiteDatabase(DatabaseInterface):
                 await db.commit()
                 return None
             result = {"status": row["status"]}
-            if row["status"] == "approved" and row["session_token"]:
+            if row["purpose"] == "api" and row["status"] == "approved" and row["session_token"]:
                 result["session_token"] = row["session_token"]
                 result["refresh_token"] = row["refresh_token"]
                 cursor = await db.execute("UPDATE login_requests SET session_token=NULL, refresh_token=NULL, token_delivered_at=? WHERE id=? AND status='approved' AND session_token IS NOT NULL", (time.time(), login_id))
@@ -200,14 +215,14 @@ class SQLiteDatabase(DatabaseInterface):
                 await db.rollback()
                 raise ValueError("Telegram already linked to another account") from None
 
-    async def start_request(self, username, ip, user_agent):
+    async def start_request(self, username, ip, user_agent, purpose="api", app_id=None, return_to=None):
         code = secrets.randbelow(90) + 10
         login_id = str(uuid.uuid4())
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             await db.execute("BEGIN IMMEDIATE")
             user = await (await db.execute("SELECT * FROM users WHERE username=? AND telegram_id IS NOT NULL", (username,))).fetchone()
-            await db.execute("INSERT INTO login_requests (id,user_id,expires_at,verification_code,ip,user_agent) VALUES (?,?,?,?,?,?)", (login_id, user['id'] if user else 0, time.time()+settings.LOGIN_REQUEST_TTL_SECONDS, code, ip if user else None, user_agent[:200] if user else None))
+            await db.execute("INSERT INTO login_requests (id,user_id,expires_at,verification_code,ip,user_agent,purpose,app_id,return_to) VALUES (?,?,?,?,?,?,?,?,?)", (login_id, user['id'] if user else 0, time.time()+settings.LOGIN_REQUEST_TTL_SECONDS, code, ip if user else None, user_agent[:200] if user else None, purpose, app_id, return_to))
             await db.commit()
         return login_id, code, dict(user) if user else None
 
@@ -228,10 +243,10 @@ class SQLiteDatabase(DatabaseInterface):
                 await db.commit()
                 return 'wrong'
             sid, refresh = str(uuid.uuid4()), secrets.token_urlsafe(32)
-            token = self.access({'id': row['user_id'], 'username': row['username']}, sid)
+            token = refresh if row['purpose'] == 'sso' else self.access({'id': row['user_id'], 'username': row['username']}, sid)
             now = time.time()
-            await db.execute("INSERT INTO sessions (id,user_id,refresh_hash,created_at,expires_at,ip,user_agent) VALUES (?,?,?,?,?,?,?)", (sid,row['user_id'],hashlib.sha256(refresh.encode()).hexdigest(),now,now+settings.REFRESH_TOKEN_TTL_DAYS*86400,row['ip'],row['user_agent']))
-            await db.execute("UPDATE login_requests SET status='approved',session_token=?,refresh_token=? WHERE id=?", (token,refresh,login_id))
+            await db.execute("INSERT INTO sessions (id,user_id,refresh_hash,created_at,expires_at,ip,user_agent,kind) VALUES (?,?,?,?,?,?,?,?)", (sid,row['user_id'],hashlib.sha256(refresh.encode()).hexdigest(),now,now+settings.REFRESH_TOKEN_TTL_DAYS*86400,row['ip'],row['user_agent'],row['purpose']))
+            await db.execute("UPDATE login_requests SET status='approved',session_token=?,refresh_token=? WHERE id=?", (token,refresh if row['purpose'] == 'api' else None,login_id))
             await db.commit()
             return {'status': 'authenticated'}
 
@@ -241,7 +256,7 @@ class SQLiteDatabase(DatabaseInterface):
             if revoke:
                 # Read-only validation (/auth/me) needs no write lock: the single SELECT is atomic
                 await db.execute("BEGIN IMMEDIATE")
-            row = await (await db.execute("SELECT s.*,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.user_id=? AND s.expires_at>?", (payload.get('sid'),payload.get('user_id'),time.time()))).fetchone()
+            row = await (await db.execute("SELECT s.*,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.kind='api' AND s.id=? AND s.user_id=? AND s.expires_at>?", (payload.get('sid'),payload.get('user_id'),time.time()))).fetchone()
             if not row or (row['revoked_at'] is not None and not allow_revoked):
                 return None
             if revoke:
@@ -254,7 +269,7 @@ class SQLiteDatabase(DatabaseInterface):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             await db.execute("BEGIN IMMEDIATE")
-            row = await (await db.execute("SELECT s.*,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE (refresh_hash=? OR previous_refresh_hash=?) AND revoked_at IS NULL AND expires_at>?", (digest,digest,time.time()))).fetchone()
+            row = await (await db.execute("SELECT s.*,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.kind='api' AND (refresh_hash=? OR previous_refresh_hash=?) AND revoked_at IS NULL AND expires_at>?", (digest,digest,time.time()))).fetchone()
             if not row:
                 return None
             if row['previous_refresh_hash'] == digest:
@@ -275,7 +290,7 @@ class SQLiteDatabase(DatabaseInterface):
             if not user:
                 return None
             uid, now = user['id'], time.time()
-            sessions = [dict(r) for r in await (await db.execute("SELECT id,created_at,last_used_at,ip,user_agent FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY COALESCE(last_used_at,created_at) DESC, created_at DESC, id", (uid,now))).fetchall()]
+            sessions = [dict(r) for r in await (await db.execute("SELECT id,kind,created_at,last_used_at,ip,user_agent FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY COALESCE(last_used_at,created_at) DESC, created_at DESC, id", (uid,now))).fetchall()]
             result = {'status':'ok'}
             if action == 'account':
                 recent = [dict(r) for r in await (await db.execute("SELECT created_at,CASE WHEN status='pending' AND expires_at<=? THEN 'expired' ELSE status END AS status,ip,user_agent FROM login_requests WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT 5", (now,uid))).fetchall()]
@@ -287,7 +302,7 @@ class SQLiteDatabase(DatabaseInterface):
                     return None
                 await db.execute("UPDATE sessions SET revoked_at=COALESCE(revoked_at,?) WHERE user_id=?" + (' AND id=?' if session_id is not None else ''), (now,uid,session_id) if session_id is not None else (now,uid))
             elif action == 'delete':
-                for table in ('sessions','registration_tokens','login_requests'):
+                for table in ('app_users','sessions','registration_tokens','login_requests'):
                     await db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
                 await db.execute("DELETE FROM users WHERE id=?", (uid,))
             await db.commit()
@@ -301,3 +316,57 @@ class SQLiteDatabase(DatabaseInterface):
             await db.execute("DELETE FROM sessions WHERE expires_at<? OR revoked_at<?", (cutoff,cutoff))
             await db.execute("UPDATE sessions SET ip=NULL,user_agent=NULL WHERE created_at<?", (cutoff,))
             await db.commit()
+
+    async def get_app(self, app_id):
+        if not isinstance(app_id, str):
+            return None
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            row = await (await db.execute('SELECT * FROM apps WHERE id=?', (app_id,))).fetchone()
+            return dict(row) if row else None
+
+    async def allowed(self, app, user):
+        if not app or user['telegram_id'] is None:
+            return False
+        if app['access_policy'] == 'all':
+            return True
+        async with aiosqlite.connect(self.db_path) as db:
+            return bool(await (await db.execute('SELECT 1 FROM app_users WHERE app_id=? AND user_id=?', (app['id'], user['user_id']))).fetchone())
+
+    async def browser_session(self, secret, revoke=False):
+        if not secret:
+            return None
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            now = time.time()
+            row = await (await db.execute("SELECT s.*,u.username,u.public_id,u.telegram_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.kind='sso' AND s.refresh_hash=? AND s.revoked_at IS NULL AND s.expires_at>?", (hashlib.sha256(secret.encode()).hexdigest(), now))).fetchone()
+            if not row:
+                return None
+            if revoke:
+                await db.execute('UPDATE sessions SET revoked_at=? WHERE id=?', (now, row['id']))
+            elif row['last_used_at'] is None or row['last_used_at'] < now - 300:
+                await db.execute('UPDATE sessions SET last_used_at=? WHERE id=? AND (last_used_at IS NULL OR last_used_at<?)', (now, row['id'], now - 300))
+            await db.commit()
+            return dict(row)
+
+    async def complete_browser_login(self, login_id):
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute('BEGIN IMMEDIATE')
+            await db.execute("UPDATE login_requests SET status='expired' WHERE id=? AND status='pending' AND expires_at<=?", (login_id, time.time()))
+            row = await (await db.execute("SELECT * FROM login_requests WHERE id=? AND purpose='sso'", (login_id,))).fetchone()
+            if row is None:
+                await db.commit()
+                return None
+            result = {'status': row['status']}
+            if row['status'] == 'approved' and row['session_token']:
+                digest = hashlib.sha256(row['session_token'].encode()).hexdigest()
+                active = await (await db.execute("SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.kind='sso' AND s.refresh_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.telegram_id IS NOT NULL", (digest, time.time()))).fetchone()
+                await db.execute('UPDATE login_requests SET session_token=NULL,token_delivered_at=? WHERE id=?', (time.time(), login_id))
+                if active:
+                    result.update(secret=row['session_token'], redirect=row['return_to'] or settings.PUBLIC_URL + '/')
+                else:
+                    await db.execute("UPDATE login_requests SET status='denied' WHERE id=?", (login_id,))
+                    result['status'] = 'denied'
+            await db.commit()
+            return result

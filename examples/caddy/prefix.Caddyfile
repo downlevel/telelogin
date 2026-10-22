@@ -1,0 +1,24 @@
+# Alternative deployment: PUBLIC_URL=https://example.com/telelogin (host-only cookie).
+example.com {
+    tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+    handle /telelogin/internal/* {
+        respond 404
+    }
+    handle_path /telelogin/* {
+        reverse_proxy telelogin:8000
+    }
+    handle /demo/* {
+        route {
+            request_header -X-TeleLogin-User
+            request_header -X-TeleLogin-User-Id
+            # Underscore variants: some app servers (CGI/FastCGI, some WSGI) treat _ like -.
+            request_header -X_TeleLogin_User
+            request_header -X_TeleLogin_User_Id
+            forward_auth telelogin:8000 {
+                uri /sso/verify?app=myapp&redirect=1
+                copy_headers X-TeleLogin-User X-TeleLogin-User-Id
+            }
+            reverse_proxy echo:80
+        }
+    }
+}

@@ -7,3 +7,5 @@ httpx==0.28.1
 python-telegram-bot==22.8
 aiosqlite==0.22.1
 PyJWT==2.15.1
+
+tldextract==5.4.0

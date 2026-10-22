@@ -1,0 +1,47 @@
+services:
+  telelogin:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    environment:
+      BOT_TOKEN: '0:e2e-placeholder'
+      SECRET_KEY: e2e-placeholder-secret-key-0000000000
+      INTERNAL_API_KEY: e2e-placeholder-internal-key-00000000
+      DB_URL: sqlite:///data/e2e.sqlite3
+      PUBLIC_URL: ${E2E_PUBLIC_URL}
+      SSO_COOKIE_SECURE: 'true'
+      SSO_COOKIE_DOMAIN: ${E2E_COOKIE_DOMAIN:-}
+      BOT_NOTIFY_URL: http://127.0.0.1:1/notify-login
+      FORWARDED_ALLOW_IPS: '*'
+      RATE_LIMIT_USERNAME: '200'
+      RATE_LIMIT_IP: '500'
+    ports: ['127.0.0.1:${E2E_API_PORT:-18000}:8000']
+  echo:
+    image: traefik/whoami:v1.11
+  nginx:
+    image: nginx:1.29
+    profiles: [nginx]
+    ports: ['127.0.0.1:${E2E_PORT:-18080}:443']
+    volumes:
+      - ${E2E_CONFIG_DIR}/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ${E2E_CONFIG_DIR}/telelogin.conf:/etc/nginx/telelogin.conf:ro
+      - ${E2E_CONFIG_DIR}/protect-app.conf:/etc/nginx/protect-app.conf:ro
+    depends_on: [telelogin, echo]
+  traefik:
+    image: traefik:v3.5
+    profiles: [traefik]
+    command: [--entrypoints.websecure.address=:443, --providers.file.filename=/etc/traefik/dynamic.yml]
+    ports: ['127.0.0.1:${E2E_PORT:-18080}:443']
+    volumes:
+      - ${E2E_CONFIG_DIR}/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./certs:/etc/traefik/certs:ro
+    depends_on: [telelogin, echo]
+  caddy:
+    image: caddy:2.10
+    profiles: [caddy]
+    ports: ['127.0.0.1:${E2E_PORT:-18080}:443']
+    volumes:
+      - ${E2E_CONFIG_DIR}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+    depends_on: [telelogin, echo]

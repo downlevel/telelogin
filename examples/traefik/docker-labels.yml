@@ -1,0 +1,26 @@
+# Compose override fragment. Configure Traefik's Docker provider and a shared network.
+# TeleLogin must not publish its API port in this Docker-proxy shape.
+services:
+  api:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.auth.rule=Host(`auth.example.com`) && !PathPrefix(`/internal/`)
+      - traefik.http.routers.auth.tls=true
+      - traefik.http.services.telelogin.loadbalancer.server.port=8000
+      - traefik.http.middlewares.telelogin-auth.forwardauth.address=http://api:8000/sso/verify?app=myapp&redirect=1
+      - traefik.http.middlewares.telelogin-auth.forwardauth.trustForwardHeader=false
+      - traefik.http.middlewares.telelogin-auth.forwardauth.authResponseHeaders=X-TeleLogin-User,X-TeleLogin-User-Id
+      - traefik.http.middlewares.strip-identity.headers.customrequestheaders.X-TeleLogin-User=
+      - traefik.http.middlewares.strip-identity.headers.customrequestheaders.X-TeleLogin-User-Id=
+      - traefik.http.middlewares.strip-identity.headers.customrequestheaders.X_TeleLogin_User=
+      - traefik.http.middlewares.strip-identity.headers.customrequestheaders.X_TeleLogin_User_Id=
+  your-app:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.app.rule=Host(`app.example.com`)
+      - traefik.http.routers.app.tls=true
+      - traefik.http.routers.app.middlewares=strip-identity,telelogin-auth
+      - traefik.http.services.app.loadbalancer.server.port=9000
+# Prefix alternative: change auth rule to Host(`example.com`) && PathPrefix(`/telelogin/`)
+# && !PathPrefix(`/telelogin/internal/`), add router auth.middlewares=telelogin-prefix,
+# and middleware telelogin-prefix.stripprefix.prefixes=/telelogin.

@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager, suppress
 import asyncio
 import logging
 from pathlib import Path
-from fastapi.responses import HTMLResponse
 from src.web.dependencies import get_db
 from src.web.security import RateLimiter
 from fastapi import Depends
@@ -17,10 +16,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
 from src.database.sqlite import SQLiteDatabase
 from src.web.routes import router
+from src.web.sso import router as sso_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.PUBLIC_URL == "http://localhost:8000" and not settings.DEBUG:
+        logging.getLogger(__name__).warning("PUBLIC_URL is still the localhost default with DEBUG=false")
+    if settings.PUBLIC_URL.startswith("https:") and not settings.SSO_COOKIE_SECURE:
+        logging.getLogger(__name__).warning("PUBLIC_URL uses HTTPS but SSO_COOKIE_SECURE=false")
     # Startup: Initialize database tables
     app.state.db = SQLiteDatabase()
     await app.state.db.init_db()
@@ -53,9 +57,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+class APICORSMiddleware(CORSMiddleware):
+    async def __call__(self, scope, receive, send):
+        if scope.get('path', '').startswith('/sso/'):
+            await self.app(scope, receive, send)
+        else:
+            await super().__call__(scope, receive, send)
+
+
 # Configure CORS for browser clients
 app.add_middleware(
-    CORSMiddleware,
+    APICORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,  # In production, specify your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
@@ -64,17 +76,7 @@ app.add_middleware(
 
 # Include routes
 app.include_router(router)
-
-@app.get("/")
-async def root():
-    return {"message": "TeleLogin API", "status": "running"}
-
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login():
-    return HTMLResponse(app.state.login_html)
-
+app.include_router(sso_router)
 
 @app.get("/health")
 async def health(db=Depends(get_db)):
