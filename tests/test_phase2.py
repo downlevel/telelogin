@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from src import __version__
 from src.app import app
 from src.config import Settings, settings
 from src.services.auth_service import AuthService
@@ -38,7 +39,7 @@ async def test_lifespan_health_login(tmp_path, monkeypatch):
         async with app.router.lifespan_context(app):
             assert isinstance(app.state.limiter, RateLimiter)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-                assert (await client.get('/health')).json() == {'status': 'ok'}
+                assert (await client.get('/health')).json() == {'status': 'ok', 'version': __version__}
                 response = await client.get('/login')
                 assert response.status_code == 200 and 'text/html' in response.headers['content-type']
                 assert "request('sso/complete'" in response.text and 'setInterval' not in response.text
@@ -49,11 +50,21 @@ async def test_lifespan_health_login(tmp_path, monkeypatch):
         app.state._state.update(previous_state)
 
 
-@pytest.mark.parametrize('template', ['.env.example', 'docker/env.example'])
+@pytest.mark.parametrize('template', ['.env.example', 'docker/env.example', 'deploy/.env.example'])
 def test_settings_templates(template, monkeypatch):
     for name in ('BOT_TOKEN', 'SECRET_KEY', 'INTERNAL_API_KEY'):
         monkeypatch.delenv(name, raising=False)
-    config = Settings(_env_file=Path(__file__).parents[1] / template)
+    from dotenv import dotenv_values
+    values = dict(dotenv_values(Path(__file__).parents[1] / template))
+    # Compose consumes this setting; it is not passed to the application container.
+    values.pop('TELELOGIN_VERSION', None)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match='SECRET_KEY|INTERNAL_API_KEY'):
+        Settings(_env_file=None)
+    for name, value in dict(BOT_TOKEN='123:test', SECRET_KEY='s'*32, INTERNAL_API_KEY='i'*32).items():
+        monkeypatch.setenv(name, value)
+    config = Settings(_env_file=None)
     assert config.API_PORT == 8000
     assert len(config.SECRET_KEY) >= 32 and len(config.INTERNAL_API_KEY) >= 32
 

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+from threading import Barrier
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
@@ -186,17 +187,59 @@ async def test_token_isolation_and_revocation(oidc, db):
             assert conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
 
 
-def test_keys_concurrent_and_reused(tmp_path):
+def test_keys_concurrent_and_reused(tmp_path, monkeypatch):
+    from src.web import oidc
+    barrier = Barrier(2)
+    original_generate = oidc.rsa.generate_private_key
+
+    def generate(*args, **kwargs):
+        barrier.wait(timeout=10)
+        return original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(oidc.rsa, 'generate_private_key', generate)
     filename = tmp_path / 'key.pem'
     with ThreadPoolExecutor(2) as pool:
         keys = list(pool.map(load_key, [filename, filename]))
-    assert keys[0][1] == keys[1][1] == load_key(filename)[1]
+    on_disk = load_key(filename)
+    assert keys[0][1] == keys[1][1] == on_disk[1]
+    assert all(key[0].private_numbers() == on_disk[0].private_numbers() for key in keys)
     assert filename.stat().st_mode & 0o777 == 0o600
     jwk = keys[0][1]
     from src.web.oidc import b64
     canonical = json.dumps({k: jwk[k] for k in ('e', 'kty', 'n')}, sort_keys=True, separators=(',', ':'))
     assert jwk['kid'] == b64(hashlib.sha256(canonical.encode()).digest())
     assert list(tmp_path.iterdir()) == [filename]
+
+
+def test_key_publication_failure_and_durability(tmp_path, monkeypatch):
+    from src.web import oidc
+    filename = tmp_path / 'key.pem'
+    events = []
+    original_fsync = oidc.os.fsync
+    original_link = oidc.os.link
+
+    def fsync(fd):
+        events.append('fsync')
+        return original_fsync(fd)
+
+    def link(source, target):
+        events.append('link')
+        return original_link(source, target)
+
+    monkeypatch.setattr(oidc.os, 'fsync', fsync)
+    monkeypatch.setattr(oidc.os, 'link', link)
+    load_key(filename)
+    assert events == ['fsync', 'link', 'fsync']
+    filename.unlink()
+
+    def unsupported_link(source, target):
+        raise OSError('unsupported filesystem')
+
+    monkeypatch.setattr(oidc.os, 'link', unsupported_link)
+    with pytest.raises(OSError, match='must support hard links, or pre-create') as error:
+        load_key(filename)
+    assert str(error.value.__cause__) == 'unsupported filesystem'
+    assert list(tmp_path.iterdir()) == []
 
 
 async def test_part_a_schema_migration(tmp_path):
@@ -391,3 +434,27 @@ async def test_basic_body_client_id_interop(oidc, body_auth):
         assert response.status_code == 401
         assert response.json()['error'] == 'invalid_client'
         assert response.headers['www-authenticate'] == 'Basic'
+
+
+@pytest.mark.parametrize('configured', [False, True])
+async def test_example_logout_origin_with_prefix(monkeypatch, configured):
+    from starlette.requests import Request
+    monkeypatch.setenv('OIDC_CLIENT_ID', 'demo')
+    monkeypatch.setenv('OIDC_CLIENT_SECRET', SECRET)
+    monkeypatch.setenv('SESSION_SECRET', 's'*32)
+    if configured:
+        monkeypatch.setenv('APP_ORIGIN', 'https://external.example.com')
+    else:
+        monkeypatch.delenv('APP_ORIGIN', raising=False)
+    spec = importlib.util.spec_from_file_location('oidc_example', 'examples/oidc_fastapi/app.py')
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+    expected = 'https://external.example.com' if configured else 'https://app.example.com'
+    for origin, status in [(expected, 303), ('https://evil.example.com', 403)]:
+        session = {'user': {'sub': 'test'}}
+        request = Request({'type': 'http', 'scheme': 'https', 'server': ('app.example.com', 443),
+                           'path': '/prefix/logout', 'root_path': '/prefix', 'query_string': b'',
+                           'headers': [(b'host', b'app.example.com'), (b'origin', origin.encode())],
+                           'session': session})
+        assert (await example.logout(request)).status_code == status
+        assert bool(session) == (status == 403)

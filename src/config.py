@@ -2,7 +2,7 @@
 Configuration management
 Loads environment variables and application settings
 """
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from urllib.parse import urlsplit, urlunsplit
 import ipaddress
 import tldextract
@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     SSO_COOKIE_SECURE: bool = True
     SSO_COOKIE_DOMAIN: str = ""
     REGISTRATION_MODE: str = "open"
+
+    @field_validator("SECRET_KEY", "INTERNAL_API_KEY")
+    @classmethod
+    def reject_placeholder_secrets(cls, value):
+        if value in {
+            "your_secret_key_here_minimum_32_characters_long",
+            "replace_with_shared_random_secret_at_least_32_characters",
+        }:
+            raise ValueError("Template placeholder is not a secret; run gen-secrets (python -m src.admin gen-secrets)")
+        return value
 
     @model_validator(mode="after")
     def validate_sso(self):

@@ -1,5 +1,6 @@
 """Run: uvicorn app:app --host 127.0.0.1 --port 9000 (behind HTTPS in production)."""
 import os
+from urllib.parse import urlsplit
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, Request
@@ -40,7 +41,9 @@ async def callback(request: Request):
 
 @app.post('/logout')
 async def logout(request: Request):
-    if request.headers.get('origin') != str(request.base_url).rstrip('/'):
+    base = urlsplit(str(request.base_url))
+    origin = os.getenv('APP_ORIGIN', f'{base.scheme}://{base.netloc}')
+    if request.headers.get('origin') != origin:
         return HTMLResponse('Invalid Origin', 403)
     request.session.clear()
     return RedirectResponse('/', 303)

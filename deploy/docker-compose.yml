@@ -1,0 +1,101 @@
+services:
+  # FastAPI backend
+  api:
+    image: ghcr.io/downlevel/telelogin:${TELELOGIN_VERSION:-2.0.0}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_USERNAME=${BOT_USERNAME:-YourBot}
+      - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - API_BASE_URL=${API_BASE_URL:-http://api:8000}
+      - BOT_NOTIFY_URL=${BOT_NOTIFY_URL:-http://bot:8001/notify-login}
+      # '*' is safe only because the port is published on 127.0.0.1: a proxy on the host reaches
+      # the container from the Docker gateway address, never from 127.0.0.1.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-*}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-30}
+      - LOGIN_HISTORY_RETENTION_DAYS=${LOGIN_HISTORY_RETENTION_DAYS:-30}
+      - PURGE_INTERVAL_SECONDS=${PURGE_INTERVAL_SECONDS:-3600}
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8000}
+      - SSO_COOKIE_NAME=${SSO_COOKIE_NAME:-tl_sso}
+      - SSO_COOKIE_SECURE=${SSO_COOKIE_SECURE:-true}
+      - SSO_COOKIE_DOMAIN=${SSO_COOKIE_DOMAIN:-}
+      - OIDC_KEY_FILE=${OIDC_KEY_FILE:-data/oidc-signing-key.pem}
+      - OIDC_CODE_TTL_SECONDS=${OIDC_CODE_TTL_SECONDS:-60}
+      - OIDC_TOKEN_TTL_SECONDS=${OIDC_TOKEN_TTL_SECONDS:-600}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
+      - DEBUG=${DEBUG:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-[]}
+      - LOGIN_REQUEST_TTL_SECONDS=${LOGIN_REQUEST_TTL_SECONDS:-120}
+      - REGISTRATION_TOKEN_TTL_SECONDS=${REGISTRATION_TOKEN_TTL_SECONDS:-1800}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-600}
+      - RATE_LIMIT_USERNAME=${RATE_LIMIT_USERNAME:-5}
+      - RATE_LIMIT_IP=${RATE_LIMIT_IP:-20}
+    volumes:
+      - api_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    restart: unless-stopped
+    networks:
+      telelogin_network:
+        aliases:
+          - telelogin
+
+  # Telegram bot
+  bot:
+    image: ghcr.io/downlevel/telelogin:${TELELOGIN_VERSION:-2.0.0}
+    command: ["python", "-m", "src.bot"]
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_USERNAME=${BOT_USERNAME:-YourBot}
+      - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - API_BASE_URL=${API_BASE_URL:-http://api:8000}
+      - BOT_NOTIFY_URL=${BOT_NOTIFY_URL:-http://bot:8001/notify-login}
+      # '*' is safe only because the port is published on 127.0.0.1: a proxy on the host reaches
+      # the container from the Docker gateway address, never from 127.0.0.1.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-*}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-30}
+      - LOGIN_HISTORY_RETENTION_DAYS=${LOGIN_HISTORY_RETENTION_DAYS:-30}
+      - PURGE_INTERVAL_SECONDS=${PURGE_INTERVAL_SECONDS:-3600}
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8000}
+      - SSO_COOKIE_NAME=${SSO_COOKIE_NAME:-tl_sso}
+      - SSO_COOKIE_SECURE=${SSO_COOKIE_SECURE:-true}
+      - SSO_COOKIE_DOMAIN=${SSO_COOKIE_DOMAIN:-}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
+      - DEBUG=${DEBUG:-false}
+      - LOGIN_REQUEST_TTL_SECONDS=${LOGIN_REQUEST_TTL_SECONDS:-120}
+    volumes:
+      - api_data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    restart: unless-stopped
+    networks:
+      - telelogin_network
+
+volumes:
+  api_data:
+
+networks:
+  telelogin_network:
+    driver: bridge
