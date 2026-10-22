@@ -1,5 +1,35 @@
 # TeleLogin
 
+TeleLogin also protects apps with **forward auth**: one Telegram confirmation creates a reusable
+browser session, and nginx, Traefik or Caddy supplies the app's verified identity. Per-app allowlists
+(default) or `all` policies control access. See [Integration guide](docs/INTEGRATION.md) for both
+shared-host/path-prefix and sibling-subdomain deployments, proxy snippets and the operator CLI.
+OpenID Connect is coming in a later release.
+
+**Deployment change:** the development Compose API port now binds to `127.0.0.1` only. Configure a
+local reverse proxy, or use a private Docker network with no published API port. `GET /` now serves
+a browser account page instead of JSON. `/health` remains unchanged.
+
+| Browser/SSO setting | Default | Purpose |
+| --- | --- | --- |
+| `PUBLIC_URL` | `http://localhost:8000` | External base URL, including any proxy-stripped prefix |
+| `SSO_COOKIE_NAME` | `tl_sso` | Browser cookie name |
+| `SSO_COOKIE_SECURE` | `true` | Set false only for plain HTTP local development |
+| `SSO_COOKIE_DOMAIN` | empty | Host-only; set a validated trusted parent domain for sibling apps |
+| `REGISTRATION_MODE` | `open` | `closed` requires CLI user invitations |
+
+| Browser endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/` | GET | Account page with sign-in/logout |
+| `/login?app=ID&rd=URL` | GET | Hosted Telegram login |
+| `/sso/start` | POST JSON | Begin browser login (username, optional app and rd) |
+| `/sso/complete` | POST JSON | Poll login_id; deliver browser cookie once |
+| `/sso/verify` | GET | Proxy forward-auth; app header/query, optional redirect=1 |
+| `/logout?app=ID&rd=URL` | GET | Logout confirmation |
+| `/sso/logout` | POST JSON/form | Revoke browser session, clear cookie, redirect |
+
+
+
 Telegram login confirmation using FastAPI, a Telegram bot and SQLite. Python 3.11+.
 
 ## Features
@@ -108,7 +138,7 @@ Both templates declare all supported variables. Required secrets must be supplie
 | API_PORT | 8000; host published port in Compose (internal API stays 8000) |
 | API_BASE_URL | http://api:8000 (Docker), http://localhost:8000 (local template); bot calls API |
 | BOT_NOTIFY_URL | http://bot:8001/notify-login (Docker), localhost:8001 (local template); API calls bot |
-| FORWARDED_ALLOW_IPS | 127.0.0.1; trusted proxy addresses |
+| FORWARDED_ALLOW_IPS | Trusted proxy addresses. 127.0.0.1 when running uvicorn directly; the Docker Compose default is `*` because the port is published on 127.0.0.1 only |
 
 ## Flow Overview
 
@@ -139,8 +169,8 @@ Both templates declare all supported variables. Required secrets must be supplie
 
 | Method and path | Behavior |
 | --- | --- |
-| GET / | JSON service information |
-| GET /login | Browser login page |
+| GET / | Browser account page (HTML) |
+| GET /login | Hosted browser login; optional app and rd parameters |
 | GET /health | 200 {"status":"ok"} after a database query |
 | POST /register | {"username":"alice"}; returns Telegram registration link; duplicate username 400 |
 | POST /auth/link-telegram | Internal: {"token":"...","telegram_id":42}; atomic single-use registration link |
@@ -185,7 +215,8 @@ once. Concurrent requests share a refresh promise; storage is rechecked before
 refresh. Where available, Web Locks serializes refreshes across browser tabs using
 `telelogin-refresh`. Without Web Locks, simultaneous refreshes across tabs remain
 possible and can trigger reuse revocation. `login(username, onStatusChange, onCode)`
-exposes the browser code through `onCode`. The `/login` page uses sessionStorage.
+exposes the browser code through `onCode`. The `/login` page uses the SSO cookie flow. The raw API and JavaScript client
+are the option for storing tokens in the browser.
 
 Telegram commands (private chat only — in groups the bot refuses them, so IPs and
 browsers are never shown to other members): `/status` shows the linked account and last five login requests;
@@ -273,10 +304,14 @@ the response. Registration still reveals duplicate usernames. Keep login IDs and
 Rate limits are in memory: run one worker; limits are not shared across instances.
 Username limits allow an attacker to temporarily lock out a known username.
 
-Terminate HTTPS at Caddy or Nginx. Set FORWARDED_ALLOW_IPS to the actual proxy IP(s)
-so Uvicorn can use forwarded client addresses for IP limits. The loopback default trusts
-only local proxies. Restrict network access to the API and notification service; do not
-trust arbitrary forwarded headers or use '*' on an externally reachable API.
+Terminate HTTPS at a reverse proxy (nginx, Traefik or Caddy). Uvicorn must trust the proxy so
+that IP rate limits and the IP shown in Telegram confirmations are the real client address. A
+proxy on the host reaches the container through the Docker gateway (e.g. 172.17.0.1), never
+from 127.0.0.1, so the Compose default is `FORWARDED_ALLOW_IPS=*`, which is safe only because the
+API port is published on 127.0.0.1. If you publish the port on another interface, set the proxy's
+exact address instead. When running uvicorn directly on the host, 127.0.0.1 is correct. Restrict
+network access to the API and notification service and never use '*' on an externally reachable
+API.
 
 Privacy: real linked login requests and sessions record the requesting IP and
 user-agent (at most 200 characters; notifications show at most 100). Fictitious

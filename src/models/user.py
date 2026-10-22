@@ -14,6 +14,8 @@ class User:
     created_at: Optional[datetime] = None
     linked_at: Optional[datetime] = None
     
+    public_id: str | None = None
+
     def is_linked(self) -> bool:
         """Check if user has linked Telegram account"""
         return self.telegram_id is not None

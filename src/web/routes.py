@@ -2,6 +2,7 @@
 API routes definition
 FastAPI router with all endpoints
 """
+from src.config import settings
 from src.utils.crypto import verify_token
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
@@ -28,6 +29,8 @@ async def register(request: RegisterRequest, http_request: Request, limiter=Depe
     """
     Register a new user and get Telegram link
     """
+    if settings.REGISTRATION_MODE == "closed":
+        raise HTTPException(403, "Registration is closed; ask the operator for an invitation")
     limiter.check("register", request.username, http_request.client.host if http_request.client else "unknown")
     # Create user
     user = await user_service.create_user(request.username)

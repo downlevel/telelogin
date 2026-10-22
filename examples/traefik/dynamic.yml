@@ -1,0 +1,40 @@
+# Traefik v3.5 file provider. PUBLIC_URL=https://auth.example.com.
+# Configure a TLS entrypoint and install your certificate/key at the paths below.
+http:
+  routers:
+    auth:
+      rule: 'Host(`auth.example.com`) && !PathPrefix(`/internal/`)'
+      tls: {}
+      service: telelogin
+    app:
+      rule: 'Host(`app.example.com`)'
+      tls: {}
+      service: demo
+      middlewares: [strip-identity, telelogin-auth]
+  middlewares:
+    strip-identity:
+      headers:
+        customRequestHeaders:
+          X-TeleLogin-User: ''
+          X-TeleLogin-User-Id: ''
+          # Underscore variants: some app servers (CGI/FastCGI, some WSGI) treat _ like -.
+          X_TeleLogin_User: ''
+          X_TeleLogin_User_Id: ''
+    telelogin-auth:
+      forwardAuth:
+        # myapp is the registered app id; the response redirects unauthenticated browsers.
+        address: http://telelogin:8000/sso/verify?app=myapp&redirect=1
+        authResponseHeaders: [X-TeleLogin-User, X-TeleLogin-User-Id]
+        trustForwardHeader: false
+  services:
+    telelogin:
+      loadBalancer:
+        servers: [{url: 'http://telelogin:8000'}]
+    demo:
+      loadBalancer:
+        servers: [{url: 'http://echo:80'}]
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/cert.pem
+      keyFile: /etc/traefik/certs/key.pem

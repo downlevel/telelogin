@@ -174,7 +174,7 @@ class TeleLoginBot:
                 return
             sessions = sorted(response.json()['sessions'], key=lambda row: (row['last_used_at'] if row['last_used_at'] is not None else row['created_at'], row['created_at'], row['id']), reverse=True)
             for row in sessions[:10]:
-                await update.message.reply_text(f"Created: {row['created_at']}\nLast used: {row['last_used_at']}\nIP: {row['ip']}\nBrowser: {row['user_agent']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Revoke', callback_data=f"revoke_session:{row['id']}")]]))
+                await update.message.reply_text(f"Type: {'browser' if row.get('kind') == 'sso' else 'app/API'}\nCreated: {row['created_at']}\nLast used: {row['last_used_at']}\nIP: {row['ip']}\nBrowser: {row['user_agent']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Revoke', callback_data=f"revoke_session:{row['id']}")]]))
             summary = f'{len(sessions) - 10} more not shown' if len(sessions) > 10 else 'Sessions'
             await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Revoke all', callback_data='revoke_all')]]))
         except Exception:
@@ -232,7 +232,7 @@ class TeleLoginBot:
         except Exception:
             await query.edit_message_text('Unable to process request')
 
-    async def send_login_notification(self, telegram_id: int, login_id: str, username: str, verification_code: int, requested_at: str, ip: str, user_agent: str):
+    async def send_login_notification(self, telegram_id: int, login_id: str, username: str, verification_code: int, requested_at: str, ip: str, user_agent: str, app_name: str | None = None):
         """Send login confirmation request to user"""
         logger.info(f"Sending login notification to telegram_id={telegram_id}, login_ref={log_ref(login_id)}")
         sys.stderr.flush()
@@ -248,7 +248,8 @@ class TeleLoginBot:
         try:
             await self.app.bot.send_message(
                 chat_id=telegram_id,
-                text=f"🔐 Login Request\n\n"
+                text=(f"🔐 Login request for {app_name}\n\n" if app_name else "🔐 Login Request\n\n")
+                     +
                      f"Username: {username}\n\n"
                      f"Time UTC: {requested_at}\nIP: {ip}\nBrowser: {user_agent[:100]}\nTap the code shown in your browser; if this was not you, press Deny",
                 reply_markup=reply_markup
@@ -275,11 +276,12 @@ class TeleLoginBot:
                     or type(code) is not int or not 10 <= code <= 99
                     or not isinstance(data.get('requested_at'), str) or not data['requested_at']
                     or not isinstance(data.get('ip'), str)
-                    or not isinstance(data.get('user_agent'), str)):
+                    or not isinstance(data.get('user_agent'), str)
+                    or (data.get('app_name') is not None and not isinstance(data['app_name'], str))):
                 return web.json_response({'error': 'Missing required fields'}, status=400)
 
             # Send notification via Telegram
-            await self.send_login_notification(telegram_id, login_id, username, data["verification_code"], data["requested_at"], data["ip"], data["user_agent"])
+            await self.send_login_notification(telegram_id, login_id, username, data["verification_code"], data["requested_at"], data["ip"], data["user_agent"], data.get("app_name"))
 
             return web.json_response({'success': True})
         except Exception as e:

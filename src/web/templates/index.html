@@ -93,16 +93,14 @@
                 } finally { clearTimeout(timer); }
             }
             try {
-                const {login_id, verification_code} = await request('/auth/start-login', {username});
+                const {login_id, verification_code} = await request('sso/start', {username, app: new URLSearchParams(location.search).get('app'), rd: new URLSearchParams(location.search).get('rd')});
                 message.style.fontSize = "1.5rem";
                 message.textContent = `Tap code ${verification_code} in Telegram`;
                 while (Date.now() + 2000 < deadline) {
                     await new Promise(resolve => setTimeout(resolve, 2000));
-                    const data = await request('/auth/status', {login_id});
+                    const data = await request('sso/complete', {login_id});
                     if (data.status === 'approved') {
-                        if (!data.session_token) throw new Error('Session token already retrieved');
-                        sessionStorage.setItem('telelogin_session_token', data.session_token);
-                        sessionStorage.setItem('telelogin_refresh_token', data.refresh_token);
+                        if (data.redirect) location.assign(data.redirect);
                         status.className = 'status success';
                         message.textContent = '✓ Login successful!';
                         return;

@@ -1,0 +1,19 @@
+# Alternative routers: merge with dynamic.yml's middlewares/services, replacing routers.
+# PUBLIC_URL=https://example.com/telelogin.
+http:
+  routers:
+    auth:
+      rule: 'Host(`example.com`) && PathPrefix(`/telelogin/`) && !PathPrefix(`/telelogin/internal/`)'
+      priority: 100
+      tls: {}
+      service: telelogin
+      middlewares: [telelogin-prefix]
+    app:
+      rule: 'Host(`example.com`) && PathPrefix(`/demo/`)'
+      tls: {}
+      service: demo
+      middlewares: [strip-identity, telelogin-auth]
+  middlewares:
+    telelogin-prefix:
+      stripPrefix:
+        prefixes: [/telelogin]

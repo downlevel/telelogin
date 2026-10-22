@@ -1,0 +1,23 @@
+# Caddy 2.10. PUBLIC_URL=https://auth.example.com; SSO_COOKIE_DOMAIN=example.com.
+auth.example.com {
+    tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+    @internal path /internal/*
+    respond @internal 404
+    reverse_proxy telelogin:8000
+}
+app.example.com {
+    tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+    route {
+        request_header -X-TeleLogin-User
+        request_header -X-TeleLogin-User-Id
+        # Underscore variants: some app servers (CGI/FastCGI, some WSGI) treat _ like -.
+        request_header -X_TeleLogin_User
+        request_header -X_TeleLogin_User_Id
+        # myapp is the id registered with src.admin app add.
+        forward_auth telelogin:8000 {
+            uri /sso/verify?app=myapp&redirect=1
+            copy_headers X-TeleLogin-User X-TeleLogin-User-Id
+        }
+        reverse_proxy echo:80
+    }
+}

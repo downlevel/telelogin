@@ -78,3 +78,15 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f docker/docker-compose.yml down -v
+
+  e2e:
+    name: Forward auth (${{ matrix.proxy }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        proxy: [nginx, traefik, caddy]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real proxy tests
+        run: tests/e2e/forward_auth.sh ${{ matrix.proxy }}

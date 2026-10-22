@@ -5,7 +5,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - BOT_USERNAME=${BOT_USERNAME:-YourBot}
@@ -14,12 +14,19 @@ services:
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       - API_BASE_URL=${API_BASE_URL:-http://api:8000}
       - BOT_NOTIFY_URL=${BOT_NOTIFY_URL:-http://bot:8001/notify-login}
-      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # '*' is safe only because the port is published on 127.0.0.1: a proxy on the host reaches
+      # the container from the Docker gateway address, never from 127.0.0.1.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-*}
       - ALGORITHM=${ALGORITHM:-HS256}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-30}
       - LOGIN_HISTORY_RETENTION_DAYS=${LOGIN_HISTORY_RETENTION_DAYS:-30}
       - PURGE_INTERVAL_SECONDS=${PURGE_INTERVAL_SECONDS:-3600}
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8000}
+      - SSO_COOKIE_NAME=${SSO_COOKIE_NAME:-tl_sso}
+      - SSO_COOKIE_SECURE=${SSO_COOKIE_SECURE:-true}
+      - SSO_COOKIE_DOMAIN=${SSO_COOKIE_DOMAIN:-}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
       - DEBUG=${DEBUG:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-[]}
       - LOGIN_REQUEST_TTL_SECONDS=${LOGIN_REQUEST_TTL_SECONDS:-120}
@@ -54,12 +61,19 @@ services:
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       - API_BASE_URL=${API_BASE_URL:-http://api:8000}
       - BOT_NOTIFY_URL=${BOT_NOTIFY_URL:-http://bot:8001/notify-login}
-      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # '*' is safe only because the port is published on 127.0.0.1: a proxy on the host reaches
+      # the container from the Docker gateway address, never from 127.0.0.1.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-*}
       - ALGORITHM=${ALGORITHM:-HS256}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-30}
       - LOGIN_HISTORY_RETENTION_DAYS=${LOGIN_HISTORY_RETENTION_DAYS:-30}
       - PURGE_INTERVAL_SECONDS=${PURGE_INTERVAL_SECONDS:-3600}
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8000}
+      - SSO_COOKIE_NAME=${SSO_COOKIE_NAME:-tl_sso}
+      - SSO_COOKIE_SECURE=${SSO_COOKIE_SECURE:-true}
+      - SSO_COOKIE_DOMAIN=${SSO_COOKIE_DOMAIN:-}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
       - DEBUG=${DEBUG:-false}
       - LOGIN_REQUEST_TTL_SECONDS=${LOGIN_REQUEST_TTL_SECONDS:-120}
     volumes:
