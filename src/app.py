@@ -2,12 +2,14 @@
 Backend API entrypoint
 FastAPI application main file
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from src.web.routes import router
+
 from src.config import settings
 from src.database.sqlite import SQLiteDatabase
+from src.web.routes import router
 
 # Initialize database
 db = SQLiteDatabase()
@@ -29,7 +31,7 @@ app = FastAPI(
 # Configure CORS for browser clients
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=settings.CORS_ORIGINS,  # In production, specify your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

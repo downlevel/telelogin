@@ -13,7 +13,14 @@ services:
       - BOT_USERNAME=${BOT_USERNAME:-YourBot}
       - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
       - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       - DEBUG=${DEBUG:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-[]}
+      - LOGIN_REQUEST_TTL_SECONDS=${LOGIN_REQUEST_TTL_SECONDS:-120}
+      - REGISTRATION_TOKEN_TTL_SECONDS=${REGISTRATION_TOKEN_TTL_SECONDS:-1800}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-600}
+      - RATE_LIMIT_USERNAME=${RATE_LIMIT_USERNAME:-5}
+      - RATE_LIMIT_IP=${RATE_LIMIT_IP:-20}
     volumes:
       - api_data:/app/data
     restart: unless-stopped
@@ -31,6 +38,9 @@ services:
       - BOT_USERNAME=${BOT_USERNAME:-YourBot}
       - DB_URL=${DB_URL:-sqlite:///data/db.sqlite3}
       - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - DEBUG=${DEBUG:-false}
+      - LOGIN_REQUEST_TTL_SECONDS=${LOGIN_REQUEST_TTL_SECONDS:-120}
     volumes:
       - api_data:/app/data
     depends_on:

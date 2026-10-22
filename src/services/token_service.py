@@ -1,79 +1,19 @@
-"""
-Token service
-Manages registration and login tokens
-"""
+"""Persistent registration tokens; linking and consumption share a transaction."""
 import secrets
-from datetime import datetime, timedelta
-from typing import Optional, Dict
-from src.utils.crypto import create_signed_token, verify_signed_token
-from src.config import settings
-import logging
 
-logger = logging.getLogger(__name__)
+from src.config import settings
+from src.database.sqlite import SQLiteDatabase
+
 
 class TokenService:
-    """Service for token management"""
-    
-    def __init__(self):
-        self.tokens: Dict[str, dict] = {}  # In-memory storage, replace with Redis/DB in production
-    
-    def generate_registration_token(self, user_id: int, expires_in_minutes: int = 30) -> str:
-        """
-        Generate a short registration token for Telegram deep links
-        Returns the short token (not JWT) to fit in Telegram URL limits
-        """
-        #token = secrets.token_urlsafe(32)
-        #generate simple string token 12 characters long
-        token = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(12))
-        expires_at = datetime.now() + timedelta(minutes=expires_in_minutes)
-        
-        # Store token metadata
-        self.tokens[token] = {
-            "user_id": user_id,
-            "type": "registration",
-            "expires_at": expires_at,
-            "used": False
-        }
-        
-        # Return the short token directly (not the signed JWT)
+    def __init__(self, db=None):
+        self.db = db if db is not None else SQLiteDatabase()
+
+    async def generate_registration_token(self, user_id, expires_in_minutes=None):
+        token = secrets.token_urlsafe(32)
+        ttl = settings.REGISTRATION_TOKEN_TTL_SECONDS if expires_in_minutes is None else expires_in_minutes * 60
+        await self.db.save_registration_token(token, user_id, ttl)
         return token
-    
-    def verify_registration_token(self, token: str) -> Optional[int]:
-        """
-        Verify registration token and return user_id
-        """
-        try:
-            # Check token metadata directly (token is now the short token, not JWT)
-            token_data = self.tokens.get(token)
-            if not token_data:
-                logger.warning("Token not found")
-                return None
-            
-            if token_data["type"] != "registration":
-                logger.warning("Invalid token type")
-                return None
-            
-            if token_data["used"]:
-                logger.warning("Token already used")
-                return None
-            
-            if datetime.now() > token_data["expires_at"]:
-                logger.warning("Token expired")
-                return None
-            
-            # Mark as used
-            token_data["used"] = True
-            
-            return token_data["user_id"]
-        
-        except Exception as e:
-            logger.error(f"Error verifying token: {e}")
-            return None
-    
-    def create_telegram_link(self, token: str, bot_username: str = None) -> str:
-        """
-        Create Telegram deep link with token
-        """
-        if bot_username is None:
-            bot_username = settings.BOT_USERNAME
-        return f"https://t.me/{bot_username}?start={token}&startattach=reply"
+
+    def create_telegram_link(self, token, bot_username=None):
+        return f"https://t.me/{bot_username or settings.BOT_USERNAME}?start={token}&startattach=reply"
