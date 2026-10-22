@@ -25,7 +25,7 @@ class AuthService:
     async def send_login_notification(self, telegram_id, login_id, username):
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post("http://bot:8001/notify-login", headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json={"telegram_id": telegram_id, "login_id": login_id, "username": username})
+                response = await client.post(settings.BOT_NOTIFY_URL, headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json={"telegram_id": telegram_id, "login_id": login_id, "username": username})
                 response.raise_for_status()
         except Exception:
             logger.warning("Login notification failed")

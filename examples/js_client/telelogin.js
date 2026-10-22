@@ -92,7 +92,6 @@ class TeleLoginClient {
       }
 
       const data = await response.json();
-      console.log('Registration link:', data.link);
       return data.link;
     } catch (error) {
       console.error('Registration error:', error);
@@ -149,7 +148,7 @@ class TeleLoginClient {
    * @param {Function} onStatusChange 
    * @returns {Promise<object>} Login result with status and session_token
    */
-  async pollLoginStatus(loginId, onStatusChange = null, timeout = 60000) {
+  async pollLoginStatus(loginId, onStatusChange = null, timeout = 150000) {
     const startTime = Date.now();
     const pollInterval = 2000;
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -166,7 +165,7 @@ class TeleLoginClient {
       const timer = setTimeout(() => controller.abort(), remaining());
       let data;
       try {
-        const response = await fetch(`${this.apiUrl}/status/${loginId}`, { signal: controller.signal });
+        const response = await fetch(`${this.apiUrl}/auth/status`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({login_id: loginId}), signal: controller.signal });
         if (!response.ok) {
           throw new Error('Status check failed');
         }

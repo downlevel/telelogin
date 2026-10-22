@@ -16,4 +16,4 @@ class TokenService:
         return token
 
     def create_telegram_link(self, token, bot_username=None):
-        return f"https://t.me/{bot_username or settings.BOT_USERNAME}?start={token}&startattach=reply"
+        return f"https://t.me/{bot_username or settings.BOT_USERNAME}?start={token}"

@@ -37,3 +37,7 @@ class LoginConfirmResponse(BaseModel):
 class LoginStatusResponse(BaseModel):
     status: str
     session_token: str | None = None  # Optional, only present when status is 'approved'
+
+
+class LoginStatusRequest(BaseModel):
+    login_id: str

@@ -12,10 +12,6 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from src.config import settings
 from src.web.security import valid_internal_key
 from uuid import UUID
-from src.services.auth_service import AuthService
-from src.services.token_service import TokenService
-from src.database.sqlite import SQLiteDatabase
-from src.services.user_service import UserService
 
 # Configure logging with immediate flush
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -39,17 +35,12 @@ def log_ref(login_id) -> str:
 class TeleLoginBot:
     def __init__(self):
         self.app = Application.builder().token(settings.BOT_TOKEN).build()
-        self.db = SQLiteDatabase()
-        self.auth_service = AuthService(self.db)
-        self.user_service = UserService(self.db)
-        self.token_service = TokenService()
-        # Use 'api' hostname for Docker network communication
-        api_port = getattr(settings, 'API_PORT', 8000)
-        self.api_base_url = f"http://api:{api_port}"
+        self.api_base_url = settings.API_BASE_URL.rstrip("/")
 
         # HTTP server for receiving notifications
         self.web_app = web.Application()
         self.web_app.router.add_post('/notify-login', self.handle_login_notification)
+        self.web_app.router.add_get('/health', self.health)
 
         # Debug: print configuration
         logger.info(f"Bot username configured as: {settings.BOT_USERNAME}")
@@ -266,19 +257,13 @@ class TeleLoginBot:
             logger.warning(f"Login notification request failed: {type(e).__name__}")
             return web.json_response({'error': 'Notification failed'}, status=500)
 
-    async def confirm_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle login confirmation callback"""
-        # TODO: Implement login confirmation logic
-        pass
+    async def health(self, request):
+        healthy = self.app.running
+        return web.json_response({"status": "ok" if healthy else "starting"}, status=200 if healthy else 503)
 
     async def start(self):
         """Initialize and start the bot"""
         logger.info("Initializing bot...")
-        sys.stderr.flush()
-
-        # Initialize database
-        await self.db.init_db()
-        logger.info("Database initialized")
         sys.stderr.flush()
 
         # Add handlers

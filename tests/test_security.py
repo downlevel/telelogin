@@ -17,11 +17,6 @@ from src.app import app
 from src.web.security import RateLimiter
 
 
-@pytest.fixture
-async def db(tmp_path):
-    database = SQLiteDatabase(str(tmp_path / "test.db"))
-    await database.init_db()
-    return database
 
 
 async def linked(db, username="alice", telegram_id=42):
@@ -95,11 +90,8 @@ async def test_expiry_real_and_dummy(db, monkeypatch):
 
 
 async def test_internal_api_and_public_flow(db, monkeypatch):
-    monkeypatch.setattr(routes, "db", db)
-    monkeypatch.setattr(routes, "auth_service", AuthService(db))
-    monkeypatch.setattr(routes, "user_service", routes.UserService(db))
-    monkeypatch.setattr(routes, "token_service", TokenService(db))
-    monkeypatch.setattr(routes, "limiter", RateLimiter())
+    monkeypatch.setattr(app.state, "db", db, raising=False)
+    monkeypatch.setattr(app.state, "limiter", RateLimiter(), raising=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         for endpoint, payload in [("link-telegram", {"token": "x", "telegram_id": 42}), ("confirm-login", {"login_id": "x", "telegram_id": 42}), ("deny-login", {"login_id": "x", "telegram_id": 42})]:
             for headers in ({}, {"X-Internal-Key": "wrong"}):
@@ -222,8 +214,8 @@ async def test_response_sent_before_slow_background_notification(db, monkeypatch
         notified.append(True)
 
     monkeypatch.setattr(auth, "send_login_notification", slow)
-    monkeypatch.setattr(routes, "auth_service", auth)
-    monkeypatch.setattr(routes, "limiter", RateLimiter())
+    monkeypatch.setitem(app.dependency_overrides, routes.get_auth_service, lambda: auth)
+    monkeypatch.setattr(app.state, "limiter", RateLimiter(), raising=False)
     for username in ("alice", "missing"):
         started = time.monotonic()
         messages = []

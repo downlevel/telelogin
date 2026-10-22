@@ -4,10 +4,9 @@ FastAPI router with all endpoints
 """
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
-from src.database.sqlite import SQLiteDatabase
-from src.services.auth_service import AuthService
-from src.services.token_service import TokenService
-from src.services.user_service import UserService
+from src.web.dependencies import (
+    get_db, get_limiter, get_auth_service, get_user_service, get_token_service,
+)
 from src.web.schemas import (
     LinkTelegramRequest,
     LinkTelegramResponse,
@@ -16,22 +15,15 @@ from src.web.schemas import (
     LoginStartRequest,
     LoginStartResponse,
     LoginStatusResponse,
+    LoginStatusRequest,
     RegisterRequest,
     RegisterResponse,
 )
-from src.web.security import RateLimiter, require_internal_key
+from src.web.security import require_internal_key
 
 router = APIRouter()
-limiter = RateLimiter()
-
-# Initialize services (in production, use dependency injection)
-db = SQLiteDatabase()
-auth_service = AuthService(db)
-user_service = UserService(db)
-token_service = TokenService(db)
-
 @router.post("/register", response_model=RegisterResponse)
-async def register(request: RegisterRequest, http_request: Request):
+async def register(request: RegisterRequest, http_request: Request, limiter=Depends(get_limiter), user_service=Depends(get_user_service), token_service=Depends(get_token_service)):
     """
     Register a new user and get Telegram link
     """
@@ -51,7 +43,7 @@ async def register(request: RegisterRequest, http_request: Request):
     return RegisterResponse(link=link)
 
 @router.post("/auth/link-telegram", response_model=LinkTelegramResponse, dependencies=[Depends(require_internal_key)])
-async def link_telegram(request: LinkTelegramRequest):
+async def link_telegram(request: LinkTelegramRequest, db=Depends(get_db)):
     """
     Link Telegram account to user (called by bot after /start with token)
     """
@@ -66,20 +58,17 @@ async def link_telegram(request: LinkTelegramRequest):
     )
 
 @router.post("/auth/start-login", response_model=LoginStartResponse)
-async def start_login(request: LoginStartRequest, http_request: Request, background_tasks: BackgroundTasks):
+async def start_login(request: LoginStartRequest, http_request: Request, background_tasks: BackgroundTasks, limiter=Depends(get_limiter), auth_service=Depends(get_auth_service)):
     """
     Start the login process
     """
     limiter.check("login", request.username, http_request.client.host if http_request.client else "unknown")
     result = await auth_service.start_login(request.username, background_tasks)
 
-    if not result:
-        raise HTTPException(status_code=404, detail="User not found or Telegram not linked")
-
     return LoginStartResponse(**result)
 
 @router.post("/auth/confirm-login", response_model=LoginConfirmResponse, dependencies=[Depends(require_internal_key)])
-async def confirm_login(request: LoginConfirmRequest):
+async def confirm_login(request: LoginConfirmRequest, auth_service=Depends(get_auth_service)):
     """
     Confirm login request (called by bot)
     """
@@ -90,8 +79,8 @@ async def confirm_login(request: LoginConfirmRequest):
 
     return LoginConfirmResponse(**result)
 
-@router.get("/status/{login_id}", response_model=LoginStatusResponse, response_model_exclude_none=True)
-async def get_login_status(login_id: str):
+@router.get("/status/{login_id}", response_model=LoginStatusResponse, response_model_exclude_none=True, deprecated=True)
+async def get_login_status(login_id: str, auth_service=Depends(get_auth_service)):
     """
     Get login request status
     """
@@ -104,7 +93,12 @@ async def get_login_status(login_id: str):
 
 
 @router.post("/auth/deny-login", dependencies=[Depends(require_internal_key)])
-async def deny_login(request: LoginConfirmRequest):
+async def deny_login(request: LoginConfirmRequest, db=Depends(get_db)):
     if not await db.update_login_status(request.login_id, "denied", telegram_id=request.telegram_id):
         raise HTTPException(400, "Request already handled, expired or invalid")
     return {"status": "denied"}
+
+
+@router.post("/auth/status", response_model=LoginStatusResponse, response_model_exclude_none=True)
+async def post_login_status(request: LoginStatusRequest, auth_service=Depends(get_auth_service)):
+    return await get_login_status(request.login_id, auth_service)

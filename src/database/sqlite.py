@@ -5,7 +5,7 @@ import hashlib
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -27,6 +27,11 @@ class SQLiteDatabase(DatabaseInterface):
                 raise ValueError("DB_URL must identify a SQLite file")
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    async def ping(self):
+        """Verify that the application schema is accessible."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await (await db.execute("SELECT 1 FROM users LIMIT 1")).fetchone()
 
     async def init_db(self):
         """Initialize database tables"""
@@ -114,16 +119,6 @@ class SQLiteDatabase(DatabaseInterface):
                 return User(**dict(row))
             return None
 
-    async def link_telegram_id(self, user_id: int, telegram_id: int) -> bool:
-        """Link Telegram ID to user"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET telegram_id = ?, linked_at = ? WHERE id = ?",
-                (telegram_id, datetime.now(), user_id)
-            )
-            await db.commit()
-            return True
-
     async def create_login_request(self, user_id: int) -> str:
         """Create a login request and return login_id"""
         login_id = str(uuid.uuid4())
@@ -193,7 +188,7 @@ class SQLiteDatabase(DatabaseInterface):
             if row is None:
                 raise ValueError("Invalid or expired token")
             try:
-                cursor = await db.execute("UPDATE users SET telegram_id=?, linked_at=? WHERE id=?", (telegram_id, datetime.now(), row[0]))
+                cursor = await db.execute("UPDATE users SET telegram_id=?, linked_at=? WHERE id=?", (telegram_id, datetime.now(timezone.utc).isoformat(), row[0]))
                 if cursor.rowcount != 1:
                     raise ValueError("Invalid user")
                 await db.commit()

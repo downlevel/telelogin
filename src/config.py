@@ -3,7 +3,7 @@ Configuration management
 Loads environment variables and application settings
 """
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -29,8 +29,11 @@ class Settings(BaseSettings):
     # Application
     DEBUG: bool = False
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    API_PORT: int = 8000
+    FORWARDED_ALLOW_IPS: str = "127.0.0.1"
+    API_BASE_URL: str = "http://api:8000"
+    BOT_NOTIFY_URL: str = "http://bot:8001/notify-login"
+
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 settings = Settings()

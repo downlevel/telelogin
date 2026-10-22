@@ -25,11 +25,6 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    async def link_telegram_id(self, user_id: int, telegram_id: int) -> bool:
-        """Link Telegram ID to user"""
-        pass
-
-    @abstractmethod
     async def create_login_request(self, user_id: int) -> str:
         """Create a login request and return login_id"""
         pass
