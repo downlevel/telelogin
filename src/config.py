@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_USERNAME: int = Field(default=5, gt=0)
     RATE_LIMIT_IP: int = Field(default=20, gt=0)
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_TTL_DAYS: int = Field(default=30, gt=0)
+    LOGIN_HISTORY_RETENTION_DAYS: int = Field(default=30, gt=0)
+    PURGE_INTERVAL_SECONDS: float = Field(default=3600, gt=0)
 
     # Application
     DEBUG: bool = False

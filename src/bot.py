@@ -3,12 +3,13 @@ Manages registration and login confirmation via Telegram
 """
 import asyncio
 import hashlib
+import secrets
 import sys
 import logging
 import httpx
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, filters
 from src.config import settings
 from src.web.security import valid_internal_key
 from uuid import UUID
@@ -147,78 +148,101 @@ class TeleLoginBot:
             return "❌ This registration link is invalid or expired. Please request a new one."
         return "❌ Registration failed. Please try again or contact support."
 
+    async def internal_request(self, path, telegram_id, **data):
+        async with httpx.AsyncClient(timeout=10) as client:
+            return await client.post(f"{self.api_base_url}{path}", headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json={"telegram_id": telegram_id, **data})
+
+    async def status_command(self, update, context):
+        try:
+            response = await self.internal_request('/internal/account', update.effective_user.id)
+            if response.status_code != 200:
+                await update.message.reply_text('No linked account' if response.status_code == 404 else 'Unable to process request')
+                return
+            data = response.json()
+            text = f"Account: {data['username']}\nLinked: {data['linked_at']}\nActive sessions: {data['active_sessions']}"
+            for row in data['recent_logins']:
+                text += f"\n{row['created_at']} {row['status']} IP: {row['ip']} Browser: {row['user_agent']}"
+            await update.message.reply_text(text)
+        except Exception:
+            await update.message.reply_text('Unable to process request')
+
+    async def sessions_command(self, update, context):
+        try:
+            response = await self.internal_request('/internal/sessions', update.effective_user.id)
+            if response.status_code != 200:
+                await update.message.reply_text('No linked account' if response.status_code == 404 else 'Unable to process request')
+                return
+            sessions = sorted(response.json()['sessions'], key=lambda row: (row['last_used_at'] if row['last_used_at'] is not None else row['created_at'], row['created_at'], row['id']), reverse=True)
+            for row in sessions[:10]:
+                await update.message.reply_text(f"Created: {row['created_at']}\nLast used: {row['last_used_at']}\nIP: {row['ip']}\nBrowser: {row['user_agent']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Revoke', callback_data=f"revoke_session:{row['id']}")]]))
+            summary = f'{len(sessions) - 10} more not shown' if len(sessions) > 10 else 'Sessions'
+            await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Revoke all', callback_data='revoke_all')]]))
+        except Exception:
+            await update.message.reply_text('Unable to process request')
+
+    async def unlink_command(self, update, context):
+        await update.message.reply_text('Delete your account and all data?', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('Yes, delete my account', callback_data='unlink_confirm'), InlineKeyboardButton('Cancel', callback_data='unlink_cancel')]]))
+
+    async def private_only_command(self, update, context):
+        await update.message.reply_text("Please use this command in a private chat with the bot.")
+
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle button callbacks for login confirmation"""
         query = update.callback_query
         await query.answer()
-
         try:
-            action, login_id = query.data.split(":")
-            if action not in ("login_confirm", "login_deny"):
+            parts = query.data.split(':')
+            action = parts[0]
+            lengths = {'login_confirm':3,'login_deny':2,'revoke_session':2,'revoke_all':1,'unlink_confirm':1,'unlink_cancel':1}
+            if action not in lengths or len(parts) != lengths[action]:
                 raise ValueError
-            UUID(login_id)
+            if len(parts) > 1:
+                if str(UUID(parts[1])) != parts[1]:
+                    raise ValueError
+            if action == 'login_confirm' and (len(parts[2]) != 2 or not parts[2].isascii() or not parts[2].isdigit() or not 10 <= int(parts[2]) <= 99):
+                raise ValueError
         except (AttributeError, TypeError, ValueError):
-            await query.edit_message_text("Invalid login request.")
+            await query.edit_message_text('Invalid request')
             return
-        telegram_id = update.effective_user.id
+        account_action = action in ('revoke_session', 'revoke_all', 'unlink_confirm', 'unlink_cancel')
+        if account_action and getattr(update.effective_chat, 'type', 'private') != 'private':
+            await query.edit_message_text('Please use this command in a private chat with the bot.')
+            return
+        if action == 'unlink_cancel':
+            await query.edit_message_text('Cancelled')
+            return
+        data = {}
+        if action.startswith('login_'):
+            path = '/auth/confirm-login' if action == 'login_confirm' else '/auth/deny-login'
+            data['login_id'] = parts[1]
+            if action == 'login_confirm':
+                data['verification_code'] = int(parts[2])
+        elif action == 'unlink_confirm':
+            path = '/internal/account/delete'
+        else:
+            path = '/internal/sessions/revoke'
+            data['session_id'] = parts[1] if action == 'revoke_session' else None
+        try:
+            response = await self.internal_request(path, update.effective_user.id, **data)
+            text = {'login_confirm':'✅ Login confirmed successfully!', 'login_deny':'🚫 Login request denied.', 'unlink_confirm':'Account deleted', 'revoke_session':'Session revoked', 'revoke_all':'Sessions revoked'}[action]
+            if response.status_code != 200:
+                text = 'Request already handled, expired or invalid'
+                if response.status_code == 400 and response.json().get('detail') == 'Wrong verification code':
+                    text = 'Wrong code: request denied'
+            await query.edit_message_text(text)
+        except Exception:
+            await query.edit_message_text('Unable to process request')
 
-        if action == "login_confirm":
-            try:
-                # Call API to confirm login
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        f"{self.api_base_url}/auth/confirm-login",
-                        headers={"X-Internal-Key": settings.INTERNAL_API_KEY},
-                        json={
-                            "login_id": login_id,
-                            "telegram_id": telegram_id
-                        },
-                        timeout=10.0
-                    )
-
-                    if response.status_code == 200:
-                        await query.edit_message_text(
-                            "✅ Login confirmed successfully!\n"
-                            "You can now access your account."
-                        )
-                    else:
-                        logger.warning(f"confirm-login failed: status={response.status_code}")
-                        await query.edit_message_text(
-                            "❌ Login confirmation failed.\n"
-                            "The request may already be handled, expired or invalid."
-                        )
-            except Exception as e:
-                logger.warning(f"confirm-login request failed: {type(e).__name__}")
-                await query.edit_message_text(
-                    "❌ Unable to process request. Please try again."
-                )
-
-        elif action == "login_deny":
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        f"{self.api_base_url}/auth/deny-login",
-                        headers={"X-Internal-Key": settings.INTERNAL_API_KEY},
-                        json={"login_id": login_id, "telegram_id": telegram_id}, timeout=10.0,
-                    )
-                if response.status_code != 200:
-                    logger.warning(f"deny-login failed: status={response.status_code}")
-                await query.edit_message_text("🚫 Login request denied." if response.status_code == 200 else "Request already handled, expired or invalid.")
-            except Exception as e:
-                logger.warning(f"deny-login request failed: {type(e).__name__}")
-                await query.edit_message_text("❌ Unable to process request. Please try again.")
-
-    async def send_login_notification(self, telegram_id: int, login_id: str, username: str):
+    async def send_login_notification(self, telegram_id: int, login_id: str, username: str, verification_code: int, requested_at: str, ip: str, user_agent: str):
         """Send login confirmation request to user"""
         logger.info(f"Sending login notification to telegram_id={telegram_id}, login_ref={log_ref(login_id)}")
         sys.stderr.flush()
 
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Confirm", callback_data=f"login_confirm:{login_id}"),
-                InlineKeyboardButton("🚫 Deny", callback_data=f"login_deny:{login_id}")
-            ]
-        ]
+        codes = {verification_code}
+        while len(codes) < 3:
+            codes.add(secrets.randbelow(90) + 10)
+        codes = list(codes)
+        secrets.SystemRandom().shuffle(codes)
+        keyboard = [[InlineKeyboardButton(str(code), callback_data=f"login_confirm:{login_id}:{code}") for code in codes], [InlineKeyboardButton("🚫 Deny", callback_data=f"login_deny:{login_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         try:
@@ -226,7 +250,7 @@ class TeleLoginBot:
                 chat_id=telegram_id,
                 text=f"🔐 Login Request\n\n"
                      f"Username: {username}\n\n"
-                     f"Do you want to confirm this login?",
+                     f"Time UTC: {requested_at}\nIP: {ip}\nBrowser: {user_agent[:100]}\nTap the code shown in your browser; if this was not you, press Deny",
                 reply_markup=reply_markup
             )
             logger.info("Login notification sent successfully")
@@ -246,11 +270,16 @@ class TeleLoginBot:
 
             logger.info(f"Received login notification request: telegram_id={telegram_id}, login_ref={log_ref(login_id)}")
 
-            if not all([telegram_id, login_id, username]):
+            code = data.get('verification_code')
+            if (not all([telegram_id, login_id, username])
+                    or type(code) is not int or not 10 <= code <= 99
+                    or not isinstance(data.get('requested_at'), str) or not data['requested_at']
+                    or not isinstance(data.get('ip'), str)
+                    or not isinstance(data.get('user_agent'), str)):
                 return web.json_response({'error': 'Missing required fields'}, status=400)
 
             # Send notification via Telegram
-            await self.send_login_notification(telegram_id, login_id, username)
+            await self.send_login_notification(telegram_id, login_id, username, data["verification_code"], data["requested_at"], data["ip"], data["user_agent"])
 
             return web.json_response({'success': True})
         except Exception as e:
@@ -269,6 +298,12 @@ class TeleLoginBot:
         # Add handlers
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("link", self.link_command))
+        # Account data (IPs, browsers) must never be shown in group chats
+        private = filters.ChatType.PRIVATE
+        self.app.add_handler(CommandHandler("status", self.status_command, filters=private))
+        self.app.add_handler(CommandHandler("sessions", self.sessions_command, filters=private))
+        self.app.add_handler(CommandHandler("unlink", self.unlink_command, filters=private))
+        self.app.add_handler(CommandHandler(["status", "sessions", "unlink"], self.private_only_command, filters=~private))
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
         logger.info("Handlers registered")
         sys.stderr.flush()

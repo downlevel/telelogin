@@ -141,9 +141,9 @@
             try {
                 statusEl.innerHTML = '<p>Starting login...</p>';
                 
-                const result = await client.login(username, (status) => {
-                    statusEl.innerHTML = `<p>Status: ${status}...</p>`;
-                });
+                let code = '';
+                const showCode = () => { statusEl.textContent = `Tap code ${code} in Telegram`; statusEl.style.fontSize = '1.5rem'; };
+                const result = await client.login(username, () => { if (code) showCode(); }, (value) => { code = value; showCode(); });
 
                 if (result.success) {
                     statusEl.innerHTML = '<p class="success">✓ Login successful!</p>';
@@ -156,8 +156,8 @@
             }
         }
 
-        function doLogout() {
-            client.logout();
+        async function doLogout() {
+            await client.logout();
             updateSessionInfo();
             document.getElementById('loginStatus').innerHTML = '<p>Logged out</p>';
         }

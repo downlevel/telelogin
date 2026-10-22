@@ -2,6 +2,7 @@
 API routes definition
 FastAPI router with all endpoints
 """
+from src.utils.crypto import verify_token
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from src.web.dependencies import (
@@ -10,7 +11,7 @@ from src.web.dependencies import (
 from src.web.schemas import (
     LinkTelegramRequest,
     LinkTelegramResponse,
-    LoginConfirmRequest,
+    LoginConfirmRequest, LoginDenyRequest, RefreshRequest, AccountRequest, RevokeRequest,
     LoginConfirmResponse,
     LoginStartRequest,
     LoginStartResponse,
@@ -63,7 +64,7 @@ async def start_login(request: LoginStartRequest, http_request: Request, backgro
     Start the login process
     """
     limiter.check("login", request.username, http_request.client.host if http_request.client else "unknown")
-    result = await auth_service.start_login(request.username, background_tasks)
+    result = await auth_service.start_login(request.username, background_tasks, http_request.client.host if http_request.client else "unknown", http_request.headers.get("user-agent", ""))
 
     return LoginStartResponse(**result)
 
@@ -72,8 +73,10 @@ async def confirm_login(request: LoginConfirmRequest, auth_service=Depends(get_a
     """
     Confirm login request (called by bot)
     """
-    result = await auth_service.confirm_login(request.login_id, request.telegram_id)
+    result = await auth_service.confirm_login(request.login_id, request.telegram_id, request.verification_code)
 
+    if result == "wrong":
+        raise HTTPException(400, "Wrong verification code")
     if not result:
         raise HTTPException(status_code=400, detail="Invalid login request")
 
@@ -93,7 +96,7 @@ async def get_login_status(login_id: str, auth_service=Depends(get_auth_service)
 
 
 @router.post("/auth/deny-login", dependencies=[Depends(require_internal_key)])
-async def deny_login(request: LoginConfirmRequest, db=Depends(get_db)):
+async def deny_login(request: LoginDenyRequest, db=Depends(get_db)):
     if not await db.update_login_status(request.login_id, "denied", telegram_id=request.telegram_id):
         raise HTTPException(400, "Request already handled, expired or invalid")
     return {"status": "denied"}
@@ -102,3 +105,72 @@ async def deny_login(request: LoginConfirmRequest, db=Depends(get_db)):
 @router.post("/auth/status", response_model=LoginStatusResponse, response_model_exclude_none=True)
 async def post_login_status(request: LoginStatusRequest, auth_service=Depends(get_auth_service)):
     return await get_login_status(request.login_id, auth_service)
+
+
+
+
+def bearer(request):
+    scheme, _, token = request.headers.get('authorization', '').partition(' ')
+    payload = verify_token(token) if scheme.lower() == 'bearer' else None
+    if not payload or payload.get('type') != 'access' or not payload.get('sid') or not all(k in payload for k in ('exp','iat','jti','user_id','sub')):
+        raise unauthorized()
+    if not isinstance(payload['sid'], str) or type(payload['user_id']) is not int:
+        raise unauthorized()
+    return payload
+
+
+def unauthorized():
+    return HTTPException(401, 'Invalid token', headers={'WWW-Authenticate':'Bearer'})
+
+
+@router.get('/auth/me')
+async def me(request: Request, db=Depends(get_db)):
+    result = await db.session(bearer(request))
+    if result is None:
+        raise unauthorized()
+    return result
+
+
+@router.post('/auth/refresh')
+async def refresh(body: RefreshRequest, request: Request, db=Depends(get_db), limiter=Depends(get_limiter)):
+    limiter.check('refresh', None, request.client.host if request.client else 'unknown')
+    result = await db.refresh(body.refresh_token)
+    if result is None:
+        raise unauthorized()
+    return result
+
+
+@router.post('/auth/logout')
+@router.post('/auth/logout-all')
+async def logout(request: Request, db=Depends(get_db)):
+    result = await db.session(bearer(request), allow_revoked=not request.url.path.endswith('logout-all'), revoke='all' if request.url.path.endswith('logout-all') else 'one')
+    if result is None:
+        raise unauthorized()
+    return {'status':'logged_out'}
+
+
+@router.post('/internal/account', dependencies=[Depends(require_internal_key)])
+async def account(body: AccountRequest, db=Depends(get_db)):
+    return await internal_action(db, body.telegram_id, 'account')
+
+
+@router.post('/internal/sessions', dependencies=[Depends(require_internal_key)])
+async def sessions(body: AccountRequest, db=Depends(get_db)):
+    return await internal_action(db, body.telegram_id, 'sessions')
+
+
+@router.post('/internal/sessions/revoke', dependencies=[Depends(require_internal_key)])
+async def revoke(body: RevokeRequest, db=Depends(get_db)):
+    return await internal_action(db, body.telegram_id, 'revoke', body.session_id)
+
+
+@router.post('/internal/account/delete', dependencies=[Depends(require_internal_key)])
+async def delete(body: AccountRequest, db=Depends(get_db)):
+    return await internal_action(db, body.telegram_id, 'delete')
+
+
+async def internal_action(db, telegram_id, action, session_id=None):
+    result = await db.account_action(telegram_id, action, session_id)
+    if result is None:
+        raise HTTPException(404, 'Account or session not found')
+    return result
