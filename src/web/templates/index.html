@@ -70,60 +70,49 @@
     </div>
 
     <script>
-        let loginId = null;
-        let statusInterval = null;
-
         async function startLogin() {
+            const button = document.querySelector('button');
+            if (button.disabled) return;
             const username = document.getElementById('username').value;
-            if (!username) {
-                alert('Please enter your username');
-                return;
+            if (!username) return;
+            button.disabled = true;
+            const status = document.getElementById('status');
+            const message = document.getElementById('statusMessage');
+            status.style.display = 'block';
+            status.className = 'status pending';
+            message.textContent = 'Check your Telegram for confirmation...';
+            // Longer than the server-side login TTL (120 s default): the server reports "expired" first
+            const deadline = Date.now() + 150000;
+            async function request(url, body) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), Math.max(1, deadline - Date.now()));
+                try {
+                    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: controller.signal});
+                    if (!response.ok) throw new Error('Request failed');
+                    return await response.json();
+                } finally { clearTimeout(timer); }
             }
-
             try {
-                const response = await fetch('/auth/start-login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({username})
-                });
-
-                if (!response.ok) {
-                    alert('Login failed. Please check your username.');
-                    return;
+                const {login_id} = await request('/auth/start-login', {username});
+                while (Date.now() + 2000 < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    const data = await request('/auth/status', {login_id});
+                    if (data.status === 'approved') {
+                        if (!data.session_token) throw new Error('Session token already retrieved');
+                        sessionStorage.setItem('telelogin_session_token', data.session_token);
+                        status.className = 'status success';
+                        message.textContent = '✓ Login successful!';
+                        return;
+                    }
+                    if (['denied', 'expired'].includes(data.status)) {
+                        message.textContent = 'Login ' + data.status;
+                        return;
+                    }
                 }
-
-                const data = await response.json();
-                loginId = data.login_id;
-
-                document.getElementById('status').style.display = 'block';
-                document.getElementById('status').className = 'status pending';
-                document.getElementById('statusMessage').textContent = 
-                    'Check your Telegram for confirmation...';
-
-                // Poll for status
-                statusInterval = setInterval(checkStatus, 2000);
-
+                throw new Error('Login timeout');
             } catch (error) {
-                alert('Error: ' + error.message);
-            }
-        }
-
-        async function checkStatus() {
-            if (!loginId) return;
-
-            try {
-                const response = await fetch(`/status/${loginId}`);
-                const data = await response.json();
-
-                if (data.status === 'approved') {
-                    clearInterval(statusInterval);
-                    document.getElementById('status').className = 'status success';
-                    document.getElementById('statusMessage').textContent = 
-                        '✓ Login successful!';
-                }
-            } catch (error) {
-                console.error('Status check failed:', error);
-            }
+                message.textContent = error.name === 'AbortError' ? 'Login timeout' : error.message;
+            } finally { button.disabled = false; }
         }
     </script>
 </body>

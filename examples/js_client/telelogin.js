@@ -92,7 +92,6 @@ class TeleLoginClient {
       }
 
       const data = await response.json();
-      console.log('Registration link:', data.link);
       return data.link;
     } catch (error) {
       console.error('Registration error:', error);
@@ -149,60 +148,66 @@ class TeleLoginClient {
    * @param {Function} onStatusChange 
    * @returns {Promise<object>} Login result with status and session_token
    */
-  async pollLoginStatus(loginId, onStatusChange = null, timeout = 60000) {
+  async pollLoginStatus(loginId, onStatusChange = null, timeout = 150000) {
     const startTime = Date.now();
     const pollInterval = 2000;
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    return new Promise((resolve, reject) => {
-      const interval = setInterval(async () => {
-        try {
-          const response = await fetch(`${this.apiUrl}/status/${loginId}`);
-          
-          if (!response.ok) {
-            clearInterval(interval);
-            reject(new Error('Status check failed'));
-            return;
-          }
+    const remaining = () => timeout - (Date.now() - startTime);
 
-          const data = await response.json();
+    // One request at a time: the session token is delivered only once,
+    // so overlapping polls could let a token-less response win the race.
+    while (remaining() > pollInterval) {
+      await sleep(pollInterval);
 
-          if (onStatusChange) {
-            onStatusChange(data.status);
-          }
-
-          if (data.status === 'approved') {
-            clearInterval(interval);
-            
-            // Fetch the session token from the login request
-            // Note: In the current implementation, the token is returned when confirming
-            // Since we're polling status, we need to get it from the confirmed login
-            // For now, we'll need to modify the API to return the token in status
-            // Or store it when login is approved
-            
-            resolve({
-              success: true,
-              status: 'approved',
-              sessionToken: data.session_token || null
-            });
-          } else if (['denied', 'expired'].includes(data.status)) {
-            clearInterval(interval);
-            resolve({
-              success: false,
-              status: data.status
-            });
-          }
-
-          // Check timeout
-          if (Date.now() - startTime > timeout) {
-            clearInterval(interval);
-            reject(new Error('Login timeout'));
-          }
-        } catch (error) {
-          clearInterval(interval);
-          reject(error);
+      // Bound each request (and its body) by the overall deadline
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), remaining());
+      let data;
+      try {
+        const response = await fetch(`${this.apiUrl}/auth/status`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({login_id: loginId}), signal: controller.signal });
+        if (!response.ok) {
+          throw new Error('Status check failed');
         }
-      }, pollInterval);
-    });
+        data = await response.json();
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          throw new Error('Login timeout');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (onStatusChange) {
+        onStatusChange(data.status);
+      }
+
+      if (data.status === 'approved') {
+        if (!data.session_token) {
+          // Token already delivered to another poll of this login
+          return {
+            success: false,
+            status: 'approved',
+            error: 'Session token already retrieved'
+          };
+        }
+        return {
+          success: true,
+          status: 'approved',
+          sessionToken: data.session_token
+        };
+      }
+
+      if (['denied', 'expired'].includes(data.status)) {
+        return {
+          success: false,
+          status: data.status
+        };
+      }
+    }
+
+    throw new Error('Login timeout');
   }
 }
 

@@ -15,7 +15,7 @@ curl -X POST http://localhost:8000/register \
 **Response:**
 ```json
 {
-  "link": "https://t.me/YourBot?start=Xy9P2kR4mNqW8vTa1cBdLfGh5JuKpQsZ3xYzAbCdEfGh&startattach=reply"
+  "link": "https://t.me/YourBot?start=Xy9P2kR4mNqW8vTa1cBdLfGh5JuKpQsZ3xYzAbCdEfGh"
 }
 ```
 
@@ -32,6 +32,7 @@ This endpoint is called by the bot, not by the client directly.
 
 ```bash
 curl -X POST http://localhost:8000/auth/link-telegram \
+  -H "X-Internal-Key: $INTERNAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "token": "Xy9P2kR4mNqW8vTa1cBdLfGh5JuKpQsZ3xYzAbCdEfGh",
@@ -68,14 +69,16 @@ curl -X POST http://localhost:8000/auth/start-login \
 **What happens next:**
 - User receives notification in Telegram bot
 - User must click ✅ Confirm or 🚫 Deny
-- Client should poll `/status/{login_id}` endpoint
+- Client should poll `POST /auth/status` endpoint
 
 ---
 
 ## 4. Check login status (polling)
 
 ```bash
-curl http://localhost:8000/status/44309574-68b6-4a7e-9caa-65214e8cdd96
+curl -X POST http://localhost:8000/auth/status \
+  -H "Content-Type: application/json" \
+  -d '{"login_id":"44309574-68b6-4a7e-9caa-65214e8cdd96"}'
 ```
 
 **Response (pending):**
@@ -119,6 +122,7 @@ This endpoint is called by the bot when user clicks Confirm button.
 
 ```bash
 curl -X POST http://localhost:8000/auth/confirm-login \
+  -H "X-Internal-Key: $INTERNAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "login_id": "44309574-68b6-4a7e-9caa-65214e8cdd96",
@@ -179,11 +183,11 @@ echo ""
 # Step 3: Poll for status
 echo "Polling for login status..."
 while true; do
-  STATUS_RESPONSE=$(curl -s http://localhost:8000/status/$LOGIN_ID)
+  STATUS_RESPONSE=$(curl -s -X POST http://localhost:8000/auth/status -H "Content-Type: application/json" -d "{\"login_id\":\"$LOGIN_ID\"}")
   STATUS=$(echo $STATUS_RESPONSE | jq -r '.status')
-  
+
   echo "Status: $STATUS"
-  
+
   if [ "$STATUS" = "approved" ]; then
     SESSION_TOKEN=$(echo $STATUS_RESPONSE | jq -r '.session_token')
     echo ""
@@ -199,7 +203,7 @@ while true; do
     echo "❌ Login expired"
     exit 1
   fi
-  
+
   sleep 2
 done
 ```

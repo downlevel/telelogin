@@ -2,21 +2,24 @@
 Manages registration and login confirmation via Telegram
 """
 import asyncio
+import hashlib
 import sys
 import logging
 import httpx
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from src.config import settings
-from src.services.auth_service import AuthService
-from src.services.token_service import TokenService
-from src.database.sqlite import SQLiteDatabase
-from src.services.user_service import UserService
+from src.web.security import valid_internal_key
+from uuid import UUID
 
 # Configure logging with immediate flush
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+# python-telegram-bot logs whole updates (including /start tokens) at DEBUG
+logging.getLogger("telegram").setLevel(logging.INFO)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stderr)
@@ -24,95 +27,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def log_ref(login_id) -> str:
+    """Correlation reference for logs; a login_id unlocks /status, so never log it"""
+    return hashlib.sha256(str(login_id).encode()).hexdigest()[:12]
+
 class TeleLoginBot:
     def __init__(self):
         self.app = Application.builder().token(settings.BOT_TOKEN).build()
-        self.db = SQLiteDatabase()
-        self.auth_service = AuthService(self.db)
-        self.user_service = UserService(self.db)
-        self.token_service = TokenService()
-        # Use 'api' hostname for Docker network communication
-        api_port = getattr(settings, 'API_PORT', 8000)
-        self.api_base_url = f"http://api:{api_port}"
-        
+        self.api_base_url = settings.API_BASE_URL.rstrip("/")
+
         # HTTP server for receiving notifications
         self.web_app = web.Application()
         self.web_app.router.add_post('/notify-login', self.handle_login_notification)
-        
+        self.web_app.router.add_get('/health', self.health)
+
         # Debug: print configuration
         logger.info(f"Bot username configured as: {settings.BOT_USERNAME}")
         logger.info(f"API base URL: {self.api_base_url}")
         logger.info(f"Database URL: {settings.DB_URL}")
         sys.stderr.flush()
-        
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command with registration token"""
         # Debug logging
         logger.info("="*50)
         logger.info("/start command received")
         logger.info(f"Update user: {update.effective_user.id if update.effective_user else 'None'}")
-        logger.info(f"Message text: {update.message.text if update.message else 'No message'}")
-        logger.info(f"context.args = {context.args}")
         logger.info(f"Number of args = {len(context.args) if context.args else 0}")
-        
-        # Additional debug - check if args are empty or contain empty strings
-        if context.args:
-            for i, arg in enumerate(context.args):
-                logger.info(f"arg[{i}] = '{arg}' (length={len(arg)})")
+
         logger.info("="*50)
         sys.stderr.flush()
-        
+
         if context.args and len(context.args) > 0 and context.args[0].strip():
             # Registration flow
-            token = context.args[0].strip()
-            telegram_id = update.effective_user.id
-            username = update.effective_user.username or update.effective_user.first_name
-            
-            logger.info(f"Processing registration for telegram_id={telegram_id}, username={username}")
-            logger.info(f"Token received (first 50 chars): {token[:50]}...")
-            logger.info(f"Token length={len(token)}")
-            logger.info(f"Calling API at: {self.api_base_url}/auth/link-telegram")
-            sys.stderr.flush()
-            
-            try:
-                # Call API to link telegram account
-                logger.info("Making API call to link telegram account")
-                sys.stderr.flush()
-                
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        f"{self.api_base_url}/auth/link-telegram",
-                        json={
-                            "token": token,
-                            "telegram_id": telegram_id
-                        },
-                        timeout=10.0
-                    )
-                    
-                    logger.info(f"API response status={response.status_code}")
-                    sys.stderr.flush()
-                    
-                    if response.status_code == 200:
-                        await update.message.reply_text(
-                            f"✅ Registration successful, {username}!\n\n"
-                            "Your Telegram account is now linked to TeleLogin.\n"
-                            "You can now use Telegram to confirm your logins."
-                        )
-                    else:
-                        data = response.json()
-                        error_detail = data.get('detail', 'Unknown error')
-                        logger.error(f"API error={error_detail}")
-                        sys.stderr.flush()
-                        await update.message.reply_text(
-                            f"❌ Registration failed: {error_detail}"
-                        )
-            except Exception as e:
-                logger.error(f"Exception during registration: {str(e)}", exc_info=True)
-                sys.stderr.flush()
-                await update.message.reply_text(
-                    f"❌ Error during registration: {str(e)}\n"
-                    "Please try again or contact support."
-                )
+            await self.link_account(update, context.args[0].strip())
         else:
             # Welcome message
             logger.info("No args received, sending welcome message")
@@ -130,125 +79,140 @@ class TeleLoginBot:
                 "- Click the START button that appears\n\n"
                 "Or use the /link command with your registration token."
             )
-    
+
     async def link_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /link command with registration token as alternative to deep link"""
         logger.info("/link command received")
         sys.stderr.flush()
-        
+
         if not context.args or len(context.args) == 0:
             await update.message.reply_text(
                 "❌ Please provide your registration token:\n"
                 "/link YOUR_TOKEN_HERE"
             )
             return
-        
-        # Use same logic as start_command
-        token = context.args[0].strip()
+
+        await self.link_account(update, context.args[0].strip())
+
+    async def link_account(self, update: Update, token: str):
+        """Link the sender's Telegram account using a registration token"""
         telegram_id = update.effective_user.id
         username = update.effective_user.username or update.effective_user.first_name
-        
-        logger.info(f"Processing /link registration for telegram_id={telegram_id}, username={username}")
-        logger.info(f"Token length={len(token)}")
+
+        logger.info(f"Processing registration for telegram_id={telegram_id}")
         sys.stderr.flush()
-        
+
         try:
-            # Call API to link telegram account
-            logger.info("Making API call to link telegram account")
-            sys.stderr.flush()
-            
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.api_base_url}/auth/link-telegram",
+                    headers={"X-Internal-Key": settings.INTERNAL_API_KEY},
                     json={
                         "token": token,
                         "telegram_id": telegram_id
                     },
                     timeout=10.0
                 )
-                
-                logger.info(f"API response status={response.status_code}")
-                sys.stderr.flush()
-                
-                if response.status_code == 200:
-                    await update.message.reply_text(
-                        f"✅ Registration successful, {username}!\n\n"
-                        "Your Telegram account is now linked to TeleLogin.\n"
-                        "You can now use Telegram to confirm your logins."
-                    )
-                else:
-                    data = response.json()
-                    error_detail = data.get('detail', 'Unknown error')
-                    logger.error(f"API error={error_detail}")
-                    sys.stderr.flush()
-                    await update.message.reply_text(
-                        f"❌ Registration failed: {error_detail}"
-                    )
         except Exception as e:
-            logger.error(f"Exception during /link registration: {str(e)}", exc_info=True)
-            sys.stderr.flush()
+            logger.warning(f"link-telegram request failed: {type(e).__name__}")
             await update.message.reply_text(
-                f"❌ Error during registration: {str(e)}\n"
+                "❌ Error during registration.\n"
                 "Please try again or contact support."
             )
-    
+            return
+
+        if response.status_code == 200:
+            await update.message.reply_text(
+                f"✅ Registration successful, {username}!\n\n"
+                "Your Telegram account is now linked to TeleLogin.\n"
+                "You can now use Telegram to confirm your logins."
+            )
+            return
+
+        logger.warning(f"link-telegram failed: status={response.status_code}")
+        await update.message.reply_text(self.registration_error_message(response))
+
+    @staticmethod
+    def registration_error_message(response) -> str:
+        """Map known API errors to fixed user messages; never echo API text"""
+        detail = None
+        if response.status_code == 400:
+            try:
+                detail = response.json().get("detail")
+            except Exception:
+                detail = None
+        if detail == "Telegram already linked to another account":
+            return "❌ This Telegram account is already linked to another TeleLogin account."
+        if detail == "Invalid or expired token":
+            return "❌ This registration link is invalid or expired. Please request a new one."
+        return "❌ Registration failed. Please try again or contact support."
+
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle button callbacks for login confirmation"""
         query = update.callback_query
         await query.answer()
-        
-        # Parse callback data: "login_confirm:LOGIN_ID" or "login_deny:LOGIN_ID"
-        action, login_id = query.data.split(":", 1)
+
+        try:
+            action, login_id = query.data.split(":")
+            if action not in ("login_confirm", "login_deny"):
+                raise ValueError
+            UUID(login_id)
+        except (AttributeError, TypeError, ValueError):
+            await query.edit_message_text("Invalid login request.")
+            return
         telegram_id = update.effective_user.id
-        
+
         if action == "login_confirm":
             try:
                 # Call API to confirm login
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         f"{self.api_base_url}/auth/confirm-login",
+                        headers={"X-Internal-Key": settings.INTERNAL_API_KEY},
                         json={
                             "login_id": login_id,
                             "telegram_id": telegram_id
                         },
                         timeout=10.0
                     )
-                    
+
                     if response.status_code == 200:
                         await query.edit_message_text(
                             "✅ Login confirmed successfully!\n"
                             "You can now access your account."
                         )
                     else:
+                        logger.warning(f"confirm-login failed: status={response.status_code}")
                         await query.edit_message_text(
                             "❌ Login confirmation failed.\n"
-                            "The request may have expired or is invalid."
+                            "The request may already be handled, expired or invalid."
                         )
             except Exception as e:
+                logger.warning(f"confirm-login request failed: {type(e).__name__}")
                 await query.edit_message_text(
-                    f"❌ Error: {str(e)}"
+                    "❌ Unable to process request. Please try again."
                 )
-        
+
         elif action == "login_deny":
             try:
-                # Update login status to denied
-                login_request = await self.db.get_login_request(login_id)
-                if login_request:
-                    await self.db.update_login_status(login_id, "denied")
-                    await query.edit_message_text(
-                        "🚫 Login request denied.\n"
-                        "If this wasn't you, your account is secure."
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{self.api_base_url}/auth/deny-login",
+                        headers={"X-Internal-Key": settings.INTERNAL_API_KEY},
+                        json={"login_id": login_id, "telegram_id": telegram_id}, timeout=10.0,
                     )
-                else:
-                    await query.edit_message_text("❌ Login request not found.")
+                if response.status_code != 200:
+                    logger.warning(f"deny-login failed: status={response.status_code}")
+                await query.edit_message_text("🚫 Login request denied." if response.status_code == 200 else "Request already handled, expired or invalid.")
             except Exception as e:
-                await query.edit_message_text(f"❌ Error: {str(e)}")
-    
+                logger.warning(f"deny-login request failed: {type(e).__name__}")
+                await query.edit_message_text("❌ Unable to process request. Please try again.")
+
     async def send_login_notification(self, telegram_id: int, login_id: str, username: str):
         """Send login confirmation request to user"""
-        logger.info(f"Sending login notification to telegram_id={telegram_id}, login_id={login_id}")
+        logger.info(f"Sending login notification to telegram_id={telegram_id}, login_ref={log_ref(login_id)}")
         sys.stderr.flush()
-        
+
         keyboard = [
             [
                 InlineKeyboardButton("✅ Confirm", callback_data=f"login_confirm:{login_id}"),
@@ -256,7 +220,7 @@ class TeleLoginBot:
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         try:
             await self.app.bot.send_message(
                 chat_id=telegram_id,
@@ -267,60 +231,56 @@ class TeleLoginBot:
             )
             logger.info("Login notification sent successfully")
         except Exception as e:
-            logger.error(f"Failed to send notification: {e}", exc_info=True)
+            logger.warning(f"Telegram notification failed: {type(e).__name__}")
         sys.stderr.flush()
-    
+
     async def handle_login_notification(self, request):
         """Handle HTTP POST requests to send login notifications"""
+        if not valid_internal_key(request.headers.get("X-Internal-Key")):
+            return web.json_response({"error": "Unauthorized"}, status=401)
         try:
             data = await request.json()
             telegram_id = data.get('telegram_id')
             login_id = data.get('login_id')
             username = data.get('username')
-            
-            logger.info(f"Received login notification request: telegram_id={telegram_id}, login_id={login_id}")
-            
+
+            logger.info(f"Received login notification request: telegram_id={telegram_id}, login_ref={log_ref(login_id)}")
+
             if not all([telegram_id, login_id, username]):
                 return web.json_response({'error': 'Missing required fields'}, status=400)
-            
+
             # Send notification via Telegram
             await self.send_login_notification(telegram_id, login_id, username)
-            
+
             return web.json_response({'success': True})
         except Exception as e:
-            logger.error(f"Error handling login notification: {e}", exc_info=True)
-            return web.json_response({'error': str(e)}, status=500)
-    
-    async def confirm_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle login confirmation callback"""
-        # TODO: Implement login confirmation logic
-        pass
-    
+            logger.warning(f"Login notification request failed: {type(e).__name__}")
+            return web.json_response({'error': 'Notification failed'}, status=500)
+
+    async def health(self, request):
+        healthy = self.app.running
+        return web.json_response({"status": "ok" if healthy else "starting"}, status=200 if healthy else 503)
+
     async def start(self):
         """Initialize and start the bot"""
         logger.info("Initializing bot...")
         sys.stderr.flush()
-        
-        # Initialize database
-        await self.db.init_db()
-        logger.info("Database initialized")
-        sys.stderr.flush()
-        
+
         # Add handlers
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("link", self.link_command))
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
         logger.info("Handlers registered")
         sys.stderr.flush()
-        
+
         # Start polling
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()
-        
+
         logger.info("Bot is now running and polling for updates...")
         sys.stderr.flush()
-        
+
         # Start HTTP server for notifications
         runner = web.AppRunner(self.web_app)
         await runner.setup()
@@ -328,7 +288,7 @@ class TeleLoginBot:
         await site.start()
         logger.info("HTTP notification server started on port 8001")
         sys.stderr.flush()
-        
+
         # Run until stopped
         await asyncio.Event().wait()
 

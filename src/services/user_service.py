@@ -44,21 +44,3 @@ class UserService:
         Get user by Telegram ID
         """
         return await self.db.get_user_by_telegram_id(telegram_id)
-    
-    async def link_telegram(self, user_id: int, telegram_id: int) -> bool:
-        """
-        Link Telegram account to user
-        """
-        try:
-            # Check if telegram_id is already linked
-            existing_user = await self.db.get_user_by_telegram_id(telegram_id)
-            if existing_user and existing_user.id != user_id:
-                logger.warning(f"Telegram ID {telegram_id} already linked to another user")
-                return False
-            
-            await self.db.link_telegram_id(user_id, telegram_id)
-            logger.info(f"Linked Telegram ID {telegram_id} to user {user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error linking Telegram: {e}")
-            return False
