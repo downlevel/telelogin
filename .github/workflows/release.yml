@@ -2,7 +2,8 @@ name: Release image
 
 on:
   push:
-    tags: ['v*.*.*']
+    # Final releases (v2.0.0) and prereleases (v2.1.0-rc.1); prereleases never move latest.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
 
 permissions: {}
 
@@ -41,6 +42,14 @@ jobs:
             org.opencontainers.image.description=Telegram authentication with forward auth and OpenID Connect
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.version=${{ steps.image.outputs.version }}
+      - name: Require a semver tag
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          if [ -z "$TAGS" ]; then
+            echo "::error::${GITHUB_REF_NAME} is not a semver tag (vMAJOR.MINOR.PATCH[-PRERELEASE])"
+            exit 1
+          fi
       - uses: docker/build-push-action@v6
         with:
           context: .

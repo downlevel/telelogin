@@ -63,7 +63,9 @@ jobs:
         run: docker compose -f docker/docker-compose.yml config --quiet
 
       - name: Validate release compose file
-        run: docker compose -f deploy/docker-compose.yml config --quiet
+        run: |
+          docker compose -f deploy/docker-compose.yml config --quiet
+          docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.docker-proxy.yml config --quiet
 
       - name: Build images
         run: docker compose -f docker/docker-compose.yml build

@@ -20,17 +20,17 @@ root. Developers using `docker/` substitute `docker/docker-compose.yml` for that
 1. Configure `PUBLIC_URL` to the externally visible TeleLogin base URL, without a trailing slash.
    Set up your bot and API as described in the README. Register a user via `POST /register` and
    follow the returned Telegram link, or invite one with
-   `docker compose -f deploy/docker-compose.yml exec api python -m src.admin user invite alice`.
+   `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin user invite alice`.
    With `REGISTRATION_MODE=closed`, only CLI invitations create users.
 2. Register your app on the server:
    ```sh
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app add myapp --name 'My App'
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app allow myapp alice
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app add myapp --name 'My App'
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app allow myapp alice
    ```
    Default policy is `allowlist`; each username must already exist and be linked to Telegram.
    To allow every registered, linked user instead:
    ```sh
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app policy myapp all
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app policy myapp all
    ```
 3. Choose a deployment shape:
 
@@ -41,7 +41,7 @@ root. Developers using `docker/` substitute `docker/docker-compose.yml` for that
 
    In the sibling shape, restart API and bot with the updated settings, then run:
    ```sh
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app origin add myapp https://app.example.com
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app origin add myapp https://app.example.com
    ```
    The origin must receive the configured cookie. Origins have no path, query or fragment. HTTPS
    is required except localhost/127.0.0.1 development. Cookie domains must be a non-public parent
@@ -184,8 +184,8 @@ preserves header-removal-before-auth ordering, then `copy_headers` supplies the 
 
 ## Operator CLI
 
-Run `docker compose -f deploy/docker-compose.yml exec api python -m src.admin --help`.
-Prefix the subcommands below with `docker compose -f deploy/docker-compose.yml exec api python -m src.admin`.
+Run `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin --help`.
+Prefix the subcommands below with `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin`.
 Shell access is admin access. `gen-secrets` needs no `.env` or database and prints random
 `SECRET_KEY` and `INTERNAL_API_KEY` assignments. Never share them.
 
@@ -212,8 +212,8 @@ The operator trusts every registered app; there is no consent screen.
 1. Register a confidential client and its exact callback URL:
 
    ```sh
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app add myapp --name "My App" --redirect-uri https://app.example.com/callback
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app allow myapp alice
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app add myapp --name "My App" --redirect-uri https://app.example.com/callback
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app allow myapp alice
    ```
 
    Save the printed client secret: it is shown once and only its SHA-256 hash is stored.
@@ -254,6 +254,16 @@ The operator trusts every registered app; there is no consent screen.
    )
    ```
 
+### Running the Authlib example behind a proxy
+
+Set `APP_ORIGIN` to the app's external origin (`scheme://host[:port]`, no path or
+trailing slash), for example `https://app.example.com`. Logout compares the browser
+Origin against this value; when unset it uses the origin part of `request.base_url`.
+Behind a trusted reverse proxy, start uvicorn with `--proxy-headers
+--forwarded-allow-ips <trusted-proxy-addresses>` so callback URLs use the external
+scheme. Configure the proxy to preserve the external Host and set forwarded headers.
+Never trust forwarded headers from arbitrary public callers.
+
 The stable UUID `sub` identifies the user. `profile` adds `preferred_username` and `name`.
 ID tokens are signed with RS256 and a public key from `/jwks.json`; access tokens are opaque,
 last 10 minutes by default, and work only at `/userinfo`. Raw API HS256 tokens and OIDC tokens
@@ -281,13 +291,3 @@ The existing `/register`, `/auth/*`, `/internal/*` and JavaScript client retain 
 See the [API documentation and JS client](../README.md). Raw API clients own their login page,
 number-matching polling, token storage/rotation and logout. Browser SSO cookies cannot be used as
 API refresh tokens, and API tokens cannot authorize forward-auth requests.
-
-### Running the Authlib example behind a proxy
-
-Set `APP_ORIGIN` to the app's external origin (`scheme://host[:port]`, no path or
-trailing slash), for example `https://app.example.com`. Logout compares the browser
-Origin against this value; when unset it uses the origin part of `request.base_url`.
-Behind a trusted reverse proxy, start uvicorn with `--proxy-headers
---forwarded-allow-ips <trusted-proxy-addresses>` so callback URLs use the external
-scheme. Configure the proxy to preserve the external Host and set forwarded headers.
-Never trust forwarded headers from arbitrary public callers.
