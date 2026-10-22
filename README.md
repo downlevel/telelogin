@@ -4,9 +4,10 @@ Telegram login confirmation using FastAPI, a Telegram bot and SQLite. Python 3.1
 
 ## Features
 
-- Telegram deep-link registration and Confirm/Deny login buttons.
+- Telegram deep-link registration, number matching and Deny login buttons.
 - SQLite persistence with atomic registration linking and login transitions.
-- Expiring registration tokens and login requests, with one-time JWT delivery.
+- Expiring registration tokens and login requests, with one-time access/refresh token delivery.
+- Session rotation and revocation, plus account management from Telegram.
 - Browser login page, JavaScript client and cURL integration examples.
 - Protected internal endpoints, configurable rate limits and proxy trust.
 - Docker deployment with shared storage, automatic permission migration and healthchecks.
@@ -93,7 +94,10 @@ Both templates declare all supported variables. Required secrets must be supplie
 | SECRET_KEY | Required, minimum 32 characters; JWT signing |
 | INTERNAL_API_KEY | Required, minimum 32 characters; shared API/bot secret |
 | ALGORITHM | HS256 |
-| ACCESS_TOKEN_EXPIRE_MINUTES | 30 |
+| ACCESS_TOKEN_EXPIRE_MINUTES | 15; access JWT lifetime |
+| REFRESH_TOKEN_TTL_DAYS | 30; fixed session lifetime from creation |
+| LOGIN_HISTORY_RETENTION_DAYS | 30; login history and session metadata retention |
+| PURGE_INTERVAL_SECONDS | 3600; cleanup interval, also run at startup |
 | DEBUG | false |
 | CORS_ORIGINS | [] (JSON list) |
 | LOGIN_REQUEST_TTL_SECONDS | 120 |
@@ -119,14 +123,15 @@ Both templates declare all supported variables. Required secrets must be supplie
 
 ### Login
 
-1. The client posts the username to `/auth/start-login` and receives a pending login ID.
+1. The client posts the username to `/auth/start-login` and receives a pending login ID and a two-digit `verification_code`.
+   Display the code prominently; selecting a wrong code in Telegram denies the request.
 2. For linked users the API schedules a Telegram notification after sending the response.
    Missing or unlinked users receive a dummy request that can only expire.
-3. The owner chooses Confirm or Deny. The bot calls the protected confirm or deny
-   endpoint with the sender's Telegram ID. Only pending, unexpired requests can change.
+3. The owner chooses the browser code or Deny. The bot calls the protected confirm or deny
+   endpoint with the sender's Telegram ID (and code for confirmation). Only pending, unexpired requests can change.
 4. The client polls `POST /auth/status` sequentially with `{"login_id":"..."}`.
-5. Confirmation produces `approved` with a JWT delivered once across POST and the
-   deprecated GET endpoint. Later polls return `approved` without the token.
+5. Confirmation produces `approved` with access and refresh tokens delivered once across POST and the
+   deprecated GET endpoint. Later polls return `approved` without either token.
 6. Deny produces `denied`; pending requests past the configured TTL become `expired`.
    Clients stop on a terminal state and enforce their own polling deadline.
 
@@ -139,18 +144,55 @@ Both templates declare all supported variables. Required secrets must be supplie
 | GET /health | 200 {"status":"ok"} after a database query |
 | POST /register | {"username":"alice"}; returns Telegram registration link; duplicate username 400 |
 | POST /auth/link-telegram | Internal: {"token":"...","telegram_id":42}; atomic single-use registration link |
-| POST /auth/start-login | {"username":"alice"}; always returns pending login_id unless rate limited |
-| POST /auth/confirm-login | Internal: {"login_id":"...","telegram_id":42}; owner approves pending unexpired login |
-| POST /auth/deny-login | Internal: same body; owner denies pending unexpired login |
+| POST /auth/start-login | {"username":"alice"}; always returns pending login_id and verification_code unless rate limited |
+| POST /auth/confirm-login | Internal: {"login_id":"...","telegram_id":42,"verification_code":42}; owner approves pending unexpired login; returns only {"status":"authenticated"}, wrong code denies with 400 |
+| POST /auth/deny-login | Internal: {"login_id":"...","telegram_id":42}; owner denies pending unexpired login |
 | POST /auth/status | {"login_id":"..."}; pending/approved/denied/expired, or 404 |
 | GET /status/{login_id} | Deprecated compatibility polling endpoint |
+| GET /auth/me | Bearer access token; returns user_id, username, session_id and access expires_at (Unix seconds); invalid/revoked/expired token 401 |
+| POST /auth/refresh | {"refresh_token":"..."}; rotates refresh and access tokens; invalid/expired/reused token 401; IP rate limited |
+| POST /auth/logout | Bearer access token; revokes current session; idempotent for an already revoked session |
+| POST /auth/logout-all | Active Bearer session required; revokes all user sessions; revoked token 401 |
+| POST /internal/account | Internal: {"telegram_id":42}; account, active session count and last five real logins; missing account 404 |
+| POST /internal/sessions | Internal: {"telegram_id":42}; active sessions with id, creation/last use, IP and user-agent |
+| POST /internal/sessions/revoke | Internal: {"telegram_id":42,"session_id":"UUID"}; null means all; invalid UUID 422, unowned session 404 |
+| POST /internal/account/delete | Internal: {"telegram_id":42}; atomically deletes account and associated rows; missing account 404 |
 
 Internal endpoints require X-Internal-Key; missing/invalid keys return 401. The bot's
 POST /notify-login requires the same key. Bot GET /health returns 200 only while its
 Telegram application is running. API and bot healthchecks are defined separately in Compose.
 Poll sequentially every two seconds, stop on a terminal status and enforce a timeout.
-An approved status includes the original JWT only once across both status endpoints.
+An approved status includes the original access and refresh tokens only once across both status endpoints.
 See examples/curl_examples.md and examples/js_client/telelogin.js.
+
+Tokens issued before this upgrade lack a session ID and are rejected: log in again.
+
+Use `Authorization: Bearer <session_token>` with `GET /auth/me` to obtain
+`user_id`, `username`, `session_id`, and the access token's `expires_at` (Unix seconds).
+`POST /auth/refresh` accepts `{"refresh_token":"..."}` and returns both replacement
+tokens. Refresh tokens are random secrets; only their SHA-256 hashes persist in
+sessions. The original login delivery temporarily holds both plaintext tokens until
+retrieval. Refresh expiry is fixed at session creation, not extended by rotation.
+Reuse of the immediately previous refresh token revokes the session. Two concurrent
+refreshes using the same token yield at most one success and revoke that session.
+`POST /auth/logout` revokes the current session; `POST /auth/logout-all` revokes all
+sessions of the user. Only logout accepts an otherwise valid token for an already revoked
+session, making its retries idempotent. Logout-all requires an active session. Every protected request checks the database.
+
+The JavaScript client stores both tokens and offers `me()`, `refresh()`, `logout()`,
+and `logoutAll()`. `authenticatedRequest()` refreshes once after a 401 and retries
+once. Concurrent requests share a refresh promise; storage is rechecked before
+refresh. Where available, Web Locks serializes refreshes across browser tabs using
+`telelogin-refresh`. Without Web Locks, simultaneous refreshes across tabs remain
+possible and can trigger reuse revocation. `login(username, onStatusChange, onCode)`
+exposes the browser code through `onCode`. The `/login` page uses sessionStorage.
+
+Telegram commands (private chat only — in groups the bot refuses them, so IPs and
+browsers are never shown to other members): `/status` shows the linked account and last five login requests;
+`/sessions` shows up to ten most recently used active sessions, reports any omitted
+count, and offers individual/all revocation; `/unlink`
+asks for confirmation then deletes the account, registration tokens, login history,
+and sessions. Its username becomes available again.
 
 ## Database Structure
 
@@ -177,14 +219,18 @@ known link for each duplicate ID, disconnects the others and logs a warning for 
 | id | TEXT primary key, random UUID |
 | user_id | INTEGER, account owner; reserved 0 for dummy requests |
 | status | TEXT: pending, approved, denied or expired |
-| session_token | TEXT JWT, cleared after delivery |
+| session_token | TEXT access JWT, cleared after delivery |
+| refresh_token | TEXT refresh secret, cleared with the access token after delivery |
+| verification_code | INTEGER 10–99, never included in status responses |
+| ip | TEXT requesting IP, NULL for dummy requests |
+| user_agent | TEXT browser header, truncated to 200 characters; NULL for dummy requests |
 | created_at | DATETIME, creation timestamp |
 | expires_at | REAL Unix timestamp, login deadline |
 | token_delivered_at | REAL Unix timestamp, nullable until delivery |
 
 `idx_login_requests_user_id` indexes the owner. Approval, denial and expiry use
 conditional updates. One-time delivery uses a serialized transaction to read the
-original token and clear it before releasing the lock.
+original token pair and clear both before releasing the lock.
 
 ### registration_tokens
 
@@ -197,6 +243,26 @@ original token and clear it before releasing the lock.
 
 The raw token is returned in the registration link and is never stored in this table.
 Token consumption and account linking share one transaction and roll back together.
+
+### sessions
+
+| Column | Storage / purpose |
+| --- | --- |
+| id | TEXT primary key, UUID; access token sid |
+| user_id | INTEGER, account owner |
+| refresh_hash | TEXT unique, SHA-256 of the current refresh secret |
+| previous_refresh_hash | TEXT SHA-256 of the last rotated secret, for reuse detection |
+| created_at | REAL Unix timestamp |
+| expires_at | REAL Unix timestamp, fixed session deadline |
+| last_used_at | REAL Unix timestamp, nullable until refresh |
+| revoked_at | REAL Unix timestamp, NULL while not revoked |
+| ip | TEXT requesting IP, removed after retention threshold |
+| user_agent | TEXT truncated browser header, removed after retention threshold |
+
+An index on user_id supports listing and revocation. Access JWTs include sub,
+user_id, sid, jti (UUID), type="access", iat and exp. Only refresh hashes persist
+in sessions. User/session operations and account deletion are serialized with
+BEGIN IMMEDIATE; dummy requests use user_id=0 and SQLite foreign keys stay disabled.
 
 ## Security and deployment
 
@@ -212,6 +278,18 @@ so Uvicorn can use forwarded client addresses for IP limits. The loopback defaul
 only local proxies. Restrict network access to the API and notification service; do not
 trust arbitrary forwarded headers or use '*' on an externally reachable API.
 
+Privacy: real linked login requests and sessions record the requesting IP and
+user-agent (at most 200 characters; notifications show at most 100). Fictitious
+requests store no IP or user-agent. No geolocation is performed. `/unlink` deletes
+all account data immediately. `LOGIN_HISTORY_RETENTION_DAYS=30` controls login
+history deletion, deletion of sessions closed beyond that period, and removal of
+IP/user-agent from older sessions even while those sessions remain active.
+`REFRESH_TOKEN_TTL_DAYS=30` controls fixed session lifetime.
+`PURGE_INTERVAL_SECONDS=3600` controls periodic retention cleanup, also run at API
+startup. Maximum normal deletion delay is the retention threshold plus this interval;
+a failed pass is logged and retried at the next interval. These positive settings
+are present in both environment templates and Docker Compose.
+
 ## Verification
 
 ```bash
@@ -222,6 +300,9 @@ Host verification: build images, check that the main process (`/proc/1/status`) 
 as UID 10001 and API /health, inspect
 both service healthchecks and verify writing an upgraded volume. Bot startup and the
 real registration/Confirm/Deny flow require a valid Telegram token.
+
+The pytest suite also runs `node tests/client_refresh.cjs` when Node is available;
+otherwise that simulation is skipped.
 
 ## License
 

@@ -62,13 +62,14 @@ curl -X POST http://localhost:8000/auth/start-login \
 ```json
 {
   "login_id": "44309574-68b6-4a7e-9caa-65214e8cdd96",
-  "status": "pending"
+  "status": "pending",
+  "verification_code": 42
 }
 ```
 
 **What happens next:**
 - User receives notification in Telegram bot
-- User must click ✅ Confirm or 🚫 Deny
+- User must select the browser code (42 in this example) or 🚫 Deny
 - Client should poll `POST /auth/status` endpoint
 
 ---
@@ -92,7 +93,8 @@ curl -X POST http://localhost:8000/auth/status \
 ```json
 {
   "status": "approved",
-  "session_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtYXJpbzkyIiwidXNlcl9pZCI6MSwiZXhwIjoxNzAwMDAwMDAwfQ.signature"
+  "session_token": "ACCESS_JWT",
+  "refresh_token": "RANDOM_REFRESH_SECRET"
 }
 ```
 
@@ -118,7 +120,7 @@ curl -X POST http://localhost:8000/auth/status \
 
 ## 5. Confirm login (called by bot)
 
-This endpoint is called by the bot when user clicks Confirm button.
+This endpoint is called by the bot when the user selects the browser code.
 
 ```bash
 curl -X POST http://localhost:8000/auth/confirm-login \
@@ -126,15 +128,15 @@ curl -X POST http://localhost:8000/auth/confirm-login \
   -H "Content-Type: application/json" \
   -d '{
     "login_id": "44309574-68b6-4a7e-9caa-65214e8cdd96",
-    "telegram_id": 123456789
+    "telegram_id": 123456789,
+    "verification_code": 42
   }'
 ```
 
 **Response:**
 ```json
 {
-  "status": "authenticated",
-  "session_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtYXJpbzkyIiwidXNlcl9pZCI6MSwiZXhwIjoxNzAwMDAwMDAwfQ.signature"
+  "status": "authenticated"
 }
 ```
 
@@ -231,3 +233,30 @@ curl -X POST $API_URL/register \
   -H "Content-Type: application/json" \
   -d '{"username": "mario92"}'
 ```
+
+### Deny login (called by bot)
+
+Deny requires the login ID and sender's Telegram ID, without a verification code.
+
+```bash
+curl -X POST http://localhost:8000/auth/deny-login \
+  -H "X-Internal-Key: $INTERNAL_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"login_id":"44309574-68b6-4a7e-9caa-65214e8cdd96","telegram_id":123456789}'
+```
+
+### Sessions (Phase 3)
+
+Show the `verification_code` from start-login to the user, then retrieve both
+`session_token` and `refresh_token` from the first approved status response.
+
+```bash
+curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8000/auth/me
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"REPLACE_WITH_REFRESH_TOKEN"}' http://localhost:8000/auth/refresh
+curl -X POST -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8000/auth/logout
+curl -X POST -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8000/auth/logout-all
+```
+
+Store both replacement tokens after refreshing. Never refresh concurrently with the
+same token: reuse revokes the session. Logout invalidates access immediately.

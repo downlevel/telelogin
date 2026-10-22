@@ -54,21 +54,24 @@ async def test_concurrent_links_keep_losing_token(db):
 async def test_confirm_races_and_original_token_delivery(db):
     user = await linked(db)
     auth = AuthService(db)
-    login = await db.create_login_request(user.id)
-    results = await asyncio.gather(*(auth.confirm_login(login, 42) for _ in range(2)))
+    login = (await db.start_request(user.username, "127.0.0.1", "test"))[0]
+    code = (await db.get_login_request(login))["verification_code"]
+    results = await asyncio.gather(*(auth.confirm_login(login, 42, code) for _ in range(2)))
     winner = next(result for result in results if result)
+    assert winner == {"status": "authenticated"}
+    original = await db.get_login_request(login)
     assert sum(result is not None for result in results) == 1
     assert not await db.update_login_status(login, "denied", telegram_id=42)
     statuses = await asyncio.gather(*(auth.get_login_status(login) for _ in range(2)))
-    assert [result["session_token"] for result in statuses if "session_token" in result] == [winner["session_token"]]
+    assert [result["session_token"] for result in statuses if "session_token" in result] == [original["session_token"]]
     assert await auth.get_login_status(login) == {"status": "approved"}
 
 
 async def test_confirm_deny_race_and_owner(db):
     user = await linked(db)
-    login = await db.create_login_request(user.id)
+    login = (await db.start_request(user.username, "127.0.0.1", "test"))[0]
     assert not await db.update_login_status(login, "denied", telegram_id=999)
-    confirm, deny = await asyncio.gather(AuthService(db).confirm_login(login, 42), db.update_login_status(login, "denied", telegram_id=42))
+    confirm, deny = await asyncio.gather(AuthService(db).confirm_login(login, 42, (await db.get_login_request(login))["verification_code"]), db.update_login_status(login, "denied", telegram_id=42))
     assert bool(confirm) != deny
     assert (await db.get_login_request(login))["status"] == ("approved" if confirm else "denied")
 
@@ -85,7 +88,7 @@ async def test_expiry_real_and_dummy(db, monkeypatch):
     assert len(tasks.tasks) == 1
     await asyncio.sleep(0.02)
     for request in (real, dummy, fake):
-        assert await auth.confirm_login(request["login_id"], 42) is None
+        assert await auth.confirm_login(request["login_id"], 42, request["verification_code"]) is None
         assert await auth.get_login_status(request["login_id"]) == {"status": "expired"}
 
 
@@ -123,7 +126,7 @@ async def test_background_latency(db, monkeypatch):
 async def test_notification_header_and_failure(db, monkeypatch, caplog):
     post = AsyncMock(side_effect=RuntimeError("sensitive-token"))
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
-    await AuthService(db).send_login_notification(42, "id", "alice")
+    await AuthService(db).send_login_notification(42, "id", "alice", 42, "now", "ip", "ua")
     assert post.call_args.kwargs["headers"]["X-Internal-Key"] == settings.INTERNAL_API_KEY
     assert "sensitive-token" not in caplog.text
 
@@ -164,7 +167,7 @@ async def test_bot_auth_callbacks_and_errors(monkeypatch, caplog):
     assert (await bot.handle_login_notification(request)).status == 401
     bot.send_login_notification.assert_not_called()
     request.headers = {"X-Internal-Key": settings.INTERNAL_API_KEY}
-    request.json.return_value = {"telegram_id": 42, "login_id": "secret-login-id", "username": "alice"}
+    request.json.return_value = {"telegram_id": 42, "login_id": "secret-login-id", "username": "alice", "verification_code": 42, "requested_at": "now", "ip": "ip", "user_agent": "ua"}
     assert (await bot.handle_login_notification(request)).status == 200
     query = SimpleNamespace(data=None, answer=AsyncMock(), edit_message_text=AsyncMock())
     update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=42, username="alice", first_name="Alice"), message=SimpleNamespace(reply_text=AsyncMock()))
@@ -174,7 +177,7 @@ async def test_bot_auth_callbacks_and_errors(monkeypatch, caplog):
     post = AsyncMock(side_effect=RuntimeError("secret-token"))
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
     for action in ("login_confirm", "login_deny"):
-        query.data = action + ":00000000-0000-0000-0000-000000000001"
+        query.data = action + ":00000000-0000-0000-0000-000000000001" + (":42" if action == "login_confirm" else "")
         await bot.button_callback(update, None)
         assert post.call_args.kwargs["headers"]["X-Internal-Key"] == settings.INTERNAL_API_KEY
     for method in (bot.start_command, bot.link_command):

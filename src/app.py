@@ -2,7 +2,9 @@
 Backend API entrypoint
 FastAPI application main file
 """
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+import asyncio
+import logging
 from pathlib import Path
 from fastapi.responses import HTMLResponse
 from src.web.dependencies import get_db
@@ -24,8 +26,25 @@ async def lifespan(app: FastAPI):
     await app.state.db.init_db()
     app.state.limiter = RateLimiter()
     app.state.login_html = Path(__file__).with_name("web").joinpath("templates/index.html").read_text(encoding="utf-8")
-    yield
-    # Shutdown: cleanup if needed
+    async def purge_once():
+        try:
+            await app.state.db.purge_old(settings.LOGIN_HISTORY_RETENTION_DAYS * 86400)
+        except Exception:
+            logging.getLogger(__name__).warning("Retention purge failed")
+
+    async def purge():
+        while True:
+            await asyncio.sleep(settings.PURGE_INTERVAL_SECONDS)
+            await purge_once()
+
+    await purge_once()
+    task = asyncio.create_task(purge())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 app = FastAPI(
     title="TeleLogin",

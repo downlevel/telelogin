@@ -32,6 +32,8 @@ class RateLimiter:
                 del self.events[key]
         keys = [(operation, "username", username), (operation, "ip", ip)]
         limits = [settings.RATE_LIMIT_USERNAME, settings.RATE_LIMIT_IP]
+        if username is None:
+            keys, limits = keys[1:], limits[1:]
         if any(len(self.events.get(key, ())) >= limit for key, limit in zip(keys, limits)):
             raise HTTPException(429, "Too many requests")
         for key in keys:

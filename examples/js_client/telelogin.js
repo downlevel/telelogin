@@ -18,7 +18,7 @@ class TeleLoginClient {
    * @returns {string|null}
    */
   getToken() {
-    return this.sessionToken;
+    return this.storage.getItem(this.storageKey);
   }
 
   /**
@@ -45,31 +45,76 @@ class TeleLoginClient {
   /**
    * Logout user
    */
-  logout() {
-    this.setToken(null);
+  setRefreshToken(token) {
+    if (token) this.storage.setItem('telelogin_refresh_token', token);
+    else this.storage.removeItem('telelogin_refresh_token');
   }
 
-  /**
-   * Make authenticated API request
-   * @param {string} endpoint 
-   * @param {object} options Fetch options
-   * @returns {Promise<Response>}
-   */
-  async authenticatedRequest(endpoint, options = {}) {
-    if (!this.sessionToken) {
-      throw new Error('Not authenticated. Please login first.');
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.sessionToken}`,
-      ...(options.headers || {})
+  async refresh(failedToken = this.getToken()) {
+    if (this.refreshPromise) return this.refreshPromise;
+    const run = async () => {
+      const current = this.storage.getItem(this.storageKey);
+      if (current && current !== failedToken) {
+        this.sessionToken = current;
+        return;
+      }
+      const refreshToken = this.storage.getItem('telelogin_refresh_token');
+      if (!refreshToken) {
+        // Nothing to refresh with (legacy login or cleared by another tab)
+        this.setToken(null);
+        throw new Error('Refresh failed');
+      }
+      const response = await fetch(`${this.apiUrl}/auth/refresh`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({refresh_token: refreshToken})
+      });
+      if (response.status >= 400 && response.status < 500) {
+        this.setToken(null);
+        this.setRefreshToken(null);
+      }
+      if (!response.ok) throw new Error('Refresh failed');
+      const data = await response.json();
+      this.setRefreshToken(data.refresh_token);
+      this.setToken(data.session_token);
     };
+    this.refreshPromise = (async () => {
+      if (typeof navigator !== 'undefined' && navigator.locks) {
+        await navigator.locks.request('telelogin-refresh', run);
+      } else await run();
+    })();
+    try { await this.refreshPromise; }
+    finally { this.refreshPromise = null; }
+  }
 
-    return fetch(`${this.apiUrl}${endpoint}`, {
-      ...options,
-      headers
+  async me() {
+    const response = await this.authenticatedRequest('/auth/me');
+    if (!response.ok) throw new Error('Authentication failed');
+    return response.json();
+  }
+
+  async logout() { return this.endSession('/auth/logout'); }
+  async logoutAll() { return this.endSession('/auth/logout-all'); }
+  async endSession(endpoint) {
+    try {
+      const response = await this.authenticatedRequest(endpoint, {method:'POST'});
+      if (!response.ok) throw new Error('Logout failed');
+      return await response.json();
+    } finally {
+      this.setToken(null);
+      this.setRefreshToken(null);
+    }
+  }
+
+  async authenticatedRequest(endpoint, options = {}) {
+    const token = this.storage.getItem(this.storageKey);
+    if (!token) throw new Error('Not authenticated. Please login first.');
+    const send = (access) => fetch(`${this.apiUrl}${endpoint}`, {
+      ...options, headers: {'Content-Type': 'application/json', ...(options.headers || {}), Authorization: `Bearer ${access}`}
     });
+    const response = await send(token);
+    if (response.status !== 401) return response;
+    await this.refresh(token);
+    return send(this.getToken());
   }
 
   /**
@@ -105,7 +150,7 @@ class TeleLoginClient {
    * @param {Function} onStatusChange Callback for status updates
    * @returns {Promise<object>} Login result with success flag and token
    */
-  async login(username, onStatusChange = null) {
+  async login(username, onStatusChange = null, onCode = null) {
     try {
       // Start login
       const response = await fetch(`${this.apiUrl}/auth/start-login`, {
@@ -122,6 +167,7 @@ class TeleLoginClient {
 
       const data = await response.json();
       const loginId = data.login_id;
+      if (onCode) onCode(data.verification_code);
 
       if (onStatusChange) {
         onStatusChange('pending');
@@ -132,6 +178,7 @@ class TeleLoginClient {
       
       // Store token if login successful
       if (result.success && result.sessionToken) {
+        this.setRefreshToken(result.refreshToken);
         this.setToken(result.sessionToken);
       }
       
@@ -195,7 +242,8 @@ class TeleLoginClient {
         return {
           success: true,
           status: 'approved',
-          sessionToken: data.session_token
+          sessionToken: data.session_token,
+          refreshToken: data.refresh_token
         };
       }
 

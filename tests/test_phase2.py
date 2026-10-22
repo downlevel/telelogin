@@ -16,8 +16,9 @@ from test_security import linked
 async def test_status_shared_delivery(db, monkeypatch, first):
     monkeypatch.setattr(app.state, 'db', db, raising=False)
     user = await linked(db)
-    login_id = await db.create_login_request(user.id)
-    original = await AuthService(db).confirm_login(login_id, 42)
+    login_id = (await db.start_request(user.username, "127.0.0.1", "test"))[0]
+    assert await AuthService(db).confirm_login(login_id, 42, (await db.get_login_request(login_id))["verification_code"]) == {"status": "authenticated"}
+    original = await db.get_login_request(login_id)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
         async def poll(method):
             if method == 'post':
@@ -64,7 +65,7 @@ async def test_configured_urls_and_bot_health(db, monkeypatch):
     assert bot.api_base_url == 'http://custom-api:9000'
     post = AsyncMock(return_value=httpx.Response(200, request=httpx.Request('POST', settings.BOT_NOTIFY_URL)))
     monkeypatch.setattr(httpx.AsyncClient, 'post', post)
-    await AuthService(db).send_login_notification(42, 'private', 'alice')
+    await AuthService(db).send_login_notification(42, 'private', 'alice', 42, 'now', 'ip', 'ua')
     assert post.call_args.args[0] == settings.BOT_NOTIFY_URL
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=42, username='alice'),
