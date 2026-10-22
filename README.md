@@ -1,14 +1,82 @@
 # TeleLogin
 
-TeleLogin also protects apps with **forward auth**: one Telegram confirmation creates a reusable
-browser session, and nginx, Traefik or Caddy supplies the app's verified identity. Per-app allowlists
-(default) or `all` policies control access. See [Integration guide](docs/INTEGRATION.md) for both
-shared-host/path-prefix and sibling-subdomain deployments, proxy snippets and the operator CLI.
-OpenID Connect supports confidential clients with authorization code flow and PKCE S256.
+TeleLogin provides Telegram-confirmed login through a self-hosted bot. Protect apps with
+Mode 2 forward auth through nginx, Traefik or Caddy, connect standard clients with Mode 1
+OpenID Connect, or build a custom UI with the raw API. Shared browser sessions and per-app
+access policies let connected apps reuse one Telegram confirmation. Python 3.11+.
 
-**Deployment change:** the development Compose API port now binds to `127.0.0.1` only. Configure a
-local reverse proxy, or use a private Docker network with no published API port. `GET /` now serves
-a browser account page instead of JSON. `/health` remains unchanged.
+## Quick start
+
+Run these commands from the root of this checkout with Docker Compose v2 installed.
+The release image below becomes available when the maintainer publishes 2.0.0.
+For a pre-release walkthrough, build it locally first:
+`docker build -f docker/Dockerfile -t ghcr.io/downlevel/telelogin:2.0.0 .`.
+
+1. Create a Telegram bot with **@BotFather**. Save its token and username (without `@`).
+2. Generate the two server secrets:
+
+   ```bash
+   docker run --rm ghcr.io/downlevel/telelogin:2.0.0 python -m src.admin gen-secrets
+   cp deploy/.env.example deploy/.env
+   ```
+
+   Edit `deploy/.env`: fill `BOT_TOKEN`, `BOT_USERNAME`, `SECRET_KEY` and
+   `INTERNAL_API_KEY` with your values. Set `PUBLIC_URL` to your external HTTPS URL,
+   for example `https://auth.example.com` or `https://example.com/telelogin`.
+   Keep `SSO_COOKIE_SECURE=true`. For sibling apps, set `SSO_COOKIE_DOMAIN=example.com`
+   only if every subdomain is trusted. The domain must match your own deployment.
+3. Start the services:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d
+   ```
+
+   Configure your HTTPS proxy using the matching [integration example](docs/INTEGRATION.md).
+   The API listens on host loopback port 8000; a Docker proxy instead needs a shared private
+   network and no published API port (see the guide). Proxy the configured public URL to
+   the API, stripping any path prefix, and block internal endpoints.
+4. Invite yourself (works with both open and closed registration):
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin user invite alice
+   ```
+
+   The hosted `/login` page signs in existing users; it has no registration control.
+   Open the printed link and press Start in Telegram. Replace `alice` consistently with
+   your chosen username in these commands.
+5. Register and authorize the first app:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app add myapp --name "My App"
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app allow myapp alice
+   ```
+
+   For a sibling app, register its actual origin too:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app origin add myapp https://app.example.com
+   ```
+
+6. Paste the nginx, Traefik or Caddy protection snippet from
+   [the integration guide](docs/INTEGRATION.md), using app id `myapp` and your actual
+   hostnames/upstream. Host proxy → `127.0.0.1:8000` (replace `8000` with `API_PORT`); proxy in Docker → `telelogin:8000` after joining the TeleLogin Compose network (`deploy_telelogin_network` by default).
+   For Docker, start with the [port-removal override and network setup](docs/INTEGRATION.md#docker-proxy-networking):
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.docker-proxy.yml up -d
+   ```
+
+   Keep the app reachable only through that proxy. Visit the app,
+   sign in and select the displayed number in Telegram.
+
+For an optional OIDC app, use `app add` with `--redirect-uri` and configure the printed
+client secret, discovery URL and `openid profile` scopes as described in
+[Mode 1](docs/INTEGRATION.md#mode-1-openid-connect).
+
+## Upgrading from 1.x
+
+Read the [breaking changes and upgrade steps](CHANGELOG.md#upgrading-from-1x) before
+starting 2.0.0, especially the existing volume mapping and proxy settings.
 
 | Browser/SSO setting | Default | Purpose |
 | --- | --- | --- |
@@ -29,9 +97,6 @@ a browser account page instead of JSON. `/health` remains unchanged.
 | `/sso/logout` | POST JSON/form | Revoke browser session, clear cookie, redirect |
 
 
-
-Telegram login confirmation using FastAPI, a Telegram bot and SQLite. Python 3.11+.
-
 ## Features
 
 - OpenID Connect discovery, RS256 ID tokens, opaque access tokens, and shared browser SSO.
@@ -49,40 +114,44 @@ Telegram login confirmation using FastAPI, a Telegram bot and SQLite. Python 3.1
 telelogin/
 ├── src/
 │   ├── app.py                    # FastAPI application and lifespan
-│   ├── bot.py                    # Telegram bot and notification HTTP server
+│   ├── admin.py                  # Operator CLI
+│   ├── bot.py                    # Telegram bot and notification server
 │   ├── config.py                 # Validated environment settings
-│   ├── database/
-│   │   ├── base.py               # Database interface
-│   │   └── sqlite.py             # Schema, migrations and atomic operations
-│   ├── models/user.py            # User model
-│   ├── services/
-│   │   ├── auth_service.py       # Login and background notifications
-│   │   ├── token_service.py      # Persistent registration tokens
-│   │   └── user_service.py       # User operations
-│   ├── utils/crypto.py           # JWT signing and verification
+│   ├── database/                 # Schema, migrations and atomic operations
+│   ├── models/                   # User model
+│   ├── services/                 # Authentication, registration and user operations
+│   ├── utils/                    # API token signing and verification
 │   └── web/
-│       ├── dependencies.py       # Application-scoped dependency providers
-│       ├── routes.py             # Authentication routes
+│       ├── routes.py             # Raw API
+│       ├── sso.py                # Browser sessions and forward auth
+│       ├── oidc.py               # OpenID Connect provider
+│       ├── dependencies.py       # Application-scoped providers
 │       ├── schemas.py            # Request/response validation
 │       ├── security.py           # Internal key checks and rate limiter
-│       └── templates/index.html  # Browser login page
-├── tests/
-│   ├── conftest.py               # Environment and temporary database fixtures
-│   ├── test_security.py          # Phase 1 security regressions
-│   └── test_phase2.py            # Architecture and integration checks
-├── docker/
-│   ├── Dockerfile
-│   ├── entrypoint.sh             # Volume ownership migration and privilege drop
-│   ├── docker-compose.yml
-│   └── env.example
+│       └── templates/index.html  # Hosted login
+├── deploy/
+│   ├── docker-compose.yml        # Release images
+│   ├── docker-compose.docker-proxy.yml # Remove published port for Docker proxies
+│   └── .env.example              # Release configuration template
+├── docker/                       # Development Compose, Dockerfile and entrypoint
+├── docs/INTEGRATION.md            # Deployment and app integration guide
 ├── examples/
-│   ├── curl_examples.md
-│   └── js_client/                # JavaScript client and demo
-├── .env.example
+│   ├── nginx/                    # Forward auth configurations
+│   ├── traefik/                  # Dynamic configuration and labels
+│   ├── caddy/                    # Forward auth Caddyfiles
+│   ├── oidc_fastapi/             # Authlib client
+│   ├── js_client/                # Raw API JavaScript client and demo
+│   └── curl_examples.md
+├── tests/                        # Unit/integration tests and e2e/ proxy harness
+├── .github/workflows/            # CI and tag-only image releases
+├── .env.example                  # Local development configuration
 ├── .gitattributes
 ├── pyproject.toml
 ├── requirements.txt
 ├── requirements-dev.txt
+├── CHANGELOG.md
+├── SECURITY.md
+├── CONTRIBUTING.md
 ├── README.md
 └── LICENSE
 ```
@@ -175,7 +244,7 @@ Both templates declare all supported variables. Required secrets must be supplie
 | --- | --- |
 | GET / | Browser account page (HTML) |
 | GET /login | Hosted browser login; optional app and rd parameters |
-| GET /health | 200 {"status":"ok"} after a database query |
+| GET /health | 200 {"status":"ok","version":"2.0.0"} after a database query |
 | POST /register | {"username":"alice"}; returns Telegram registration link; duplicate username 400 |
 | GET /.well-known/openid-configuration | OIDC discovery |
 | GET /jwks.json | Public RSA signing key |
@@ -338,8 +407,10 @@ are present in both environment templates and Docker Compose.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push to main and every pull
 request: Ruff, the test suite on Python 3.11 and 3.12 (including the Node client
-simulation and a warnings-as-errors pass), a compose validation, the image build and an
-API smoke test (`/health`, `/auth/me` → 401).
+simulation and a warnings-as-errors pass), development and deploy Compose validation,
+the image build and an API smoke test (`/health`, `/auth/me` → 401). A separate e2e job
+runs the real nginx, Traefik and Caddy forward-auth checks. Actionlint is a host review
+check and is not run in CI.
 
 ```bash
 .venv/bin/python -m pytest -q && .venv/bin/ruff check src tests && .venv/bin/python -W error::DeprecationWarning -m pytest -q

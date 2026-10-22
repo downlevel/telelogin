@@ -43,10 +43,19 @@ def load_key(filename):
         try:
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+                stream.flush()
+                os.fsync(stream.fileno())
             try:
                 os.link(temporary, path)
             except FileExistsError:
                 pass
+            except OSError as exc:
+                raise OSError(f"Cannot publish OIDC key at {path}: key directory must support hard links, or pre-create the key file") from exc
+            directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
             os.unlink(temporary)
     if path.stat().st_mode & 0o077:

@@ -13,6 +13,7 @@ from fastapi import Depends
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src import __version__
 from src.config import settings
 from src.database.sqlite import SQLiteDatabase
 from src.web.routes import router
@@ -55,7 +56,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="TeleLogin",
     description="Telegram-based authentication system",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan
 )
 
@@ -84,7 +85,7 @@ app.include_router(oidc_router)
 @app.get("/health")
 async def health(db=Depends(get_db)):
     await db.ping()
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 if __name__ == "__main__":

@@ -9,25 +9,28 @@ One Telegram confirmation creates a browser session lasting `REFRESH_TOKEN_TTL_D
 | Mode | Use when | Integration |
 | --- | --- | --- |
 | Forward auth (Mode 2) | Your app shares TeleLogin's origin or a trusted parent domain | Reverse proxy configuration; no app login code |
-| OpenID Connect (Mode 1) | An app uses a standard OIDC library or an unrelated domain | Coming in a later release |
+| OpenID Connect (Mode 1) | An app uses a standard OIDC library or an unrelated domain | Confidential clients; standard OIDC library |
 | Raw API | You need a custom login UI and token lifecycle | Existing `/register` and `/auth/*` API, [README](../README.md) |
+
+All Compose commands below use the release installation in `deploy/`, run from the checkout
+root. Developers using `docker/` substitute `docker/docker-compose.yml` for that path.
 
 ## Mode 2: forward auth
 
 1. Configure `PUBLIC_URL` to the externally visible TeleLogin base URL, without a trailing slash.
    Set up your bot and API as described in the README. Register a user via `POST /register` and
    follow the returned Telegram link, or invite one with
-   `docker compose -f docker/docker-compose.yml exec api python -m src.admin user invite alice`.
+   `docker compose -f deploy/docker-compose.yml exec api python -m src.admin user invite alice`.
    With `REGISTRATION_MODE=closed`, only CLI invitations create users.
 2. Register your app on the server:
    ```sh
-   docker compose -f docker/docker-compose.yml exec api python -m src.admin app add myapp --name 'My App'
-   docker compose -f docker/docker-compose.yml exec api python -m src.admin app allow myapp alice
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app add myapp --name 'My App'
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app allow myapp alice
    ```
    Default policy is `allowlist`; each username must already exist and be linked to Telegram.
    To allow every registered, linked user instead:
    ```sh
-   docker compose -f docker/docker-compose.yml exec api python -m src.admin app policy myapp all
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app policy myapp all
    ```
 3. Choose a deployment shape:
 
@@ -38,7 +41,7 @@ One Telegram confirmation creates a browser session lasting `REFRESH_TOKEN_TTL_D
 
    In the sibling shape, restart API and bot with the updated settings, then run:
    ```sh
-   docker compose -f docker/docker-compose.yml exec api python -m src.admin app origin add myapp https://app.example.com
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app origin add myapp https://app.example.com
    ```
    The origin must receive the configured cookie. Origins have no path, query or fragment. HTTPS
    is required except localhost/127.0.0.1 development. Cookie domains must be a non-public parent
@@ -65,7 +68,55 @@ All three proxies cover both the prefix and sibling-subdomain shapes. No real bo
 Local ports default to 18080 (proxy) and 18000 (internal test API); override `E2E_PORT` and
 `E2E_API_PORT` if necessary. The API test port is bound to loopback and removed afterward.
 
+### Docker proxy networking
+
+For a proxy on the host, keep the base Compose file and its loopback port binding.
+For a proxy in Docker, remove the published API port with the shipped override (Docker
+Compose 2.24.0+ is required for `!reset`):
+
+```sh
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.docker-proxy.yml up -d
+```
+
+Use both `-f` arguments on subsequent `up` commands so the port stays unpublished.
+With the default project name `deploy`, the network is `deploy_telelogin_network`; if you
+set `COMPOSE_PROJECT_NAME` or `-p`, replace `deploy` with that project name. The API has
+network alias `telelogin`. The development project's default network is `docker_telelogin_network`.
+
+In the proxy's separate Compose file, attach its service to that existing network (merge
+this into the proxy's configuration; retain any other networks it needs):
+
+```yaml
+services:
+  proxy:
+    networks:
+      - telelogin
+networks:
+  telelogin:
+    external: true
+    name: deploy_telelogin_network
+```
+
+Start TeleLogin first so the network exists. Alternatively, for an already running proxy
+container named `caddy`, attach it with:
+
+```sh
+docker network connect deploy_telelogin_network caddy
+```
+
+Replace `caddy` with your actual proxy container name; a manual attachment must be repeated
+if that container is recreated. Attach the protected app to a network reachable by the proxy
+as well, and replace the example app upstream separately. Only trusted containers may join
+the TeleLogin network when `FORWARDED_ALLOW_IPS=*` is used.
+
+The Caddy and Traefik examples already use `telelogin:8000`. For host proxies replace that
+TeleLogin upstream everywhere with `127.0.0.1:8000` (or your `API_PORT`). The nginx examples
+use the host upstream; for Docker replace every TeleLogin `127.0.0.1:8000` upstream with
+`telelogin:8000`. Preserve URL paths and trailing slashes when replacing upstreams.
+
 ### nginx
+
+Host proxy → `127.0.0.1:8000` (replace `8000` with `API_PORT`); proxy in Docker → `telelogin:8000` after joining the TeleLogin Compose network (`deploy_telelogin_network` by default). See [Docker proxy networking](#docker-proxy-networking) for the network attachment and port-removal override.
 
 For a shared host, copy [telelogin.conf](../examples/nginx/telelogin.conf) and
 [protect-app.conf](../examples/nginx/protect-app.conf) into `/etc/nginx/`, then adapt the
@@ -80,6 +131,8 @@ blocks public access to `/internal/*`. Keep the verify location `internal`.
 
 ### Traefik
 
+Host proxy → `127.0.0.1:8000` (replace `8000` with `API_PORT`); proxy in Docker → `telelogin:8000` after joining the TeleLogin Compose network (`deploy_telelogin_network` by default). See [Docker proxy networking](#docker-proxy-networking) for the network attachment and port-removal override.
+
 Load [dynamic.yml](../examples/traefik/dynamic.yml) through the file provider, replacing the app
 upstream `echo:80`, and enable a TLS entrypoint; install your certificate/key at the shown paths. The app id is in the
 forwardAuth `address` query. Set `trustForwardHeader: false`; the header-removal middleware must
@@ -90,10 +143,11 @@ For a shared host replace its routers with [prefix.yml](../examples/traefik/pref
 its `telelogin-prefix` middleware into the existing middlewares map. This strips the public prefix
 only on the TeleLogin router. [docker-labels.yml](../examples/traefik/docker-labels.yml) provides an
 alternative Docker-provider override, including prefix instructions (same rules as dynamic.yml,
-not run by the e2e test). Attach proxy, API and app to
-a shared private Docker network and disable the API's published port.
+not run by the e2e test).
 
 ### Caddy
+
+Host proxy → `127.0.0.1:8000` (replace `8000` with `API_PORT`); proxy in Docker → `telelogin:8000` after joining the TeleLogin Compose network (`deploy_telelogin_network` by default). See [Docker proxy networking](#docker-proxy-networking) for the network attachment and port-removal override.
 
 Adapt [Caddyfile](../examples/caddy/Caddyfile) for sibling subdomains, or
 [prefix.Caddyfile](../examples/caddy/prefix.Caddyfile) for a shared host. Install your certificate/key at the paths shown (or replace the `tls` directive with your
@@ -109,7 +163,7 @@ preserves header-removal-before-auth ordering, then `copy_headers` supplies the 
   some WSGI servers) treat `_` and `-` as the same header name.
 - `SSO_COOKIE_DOMAIN` shares the browser credential with **every subdomain** of that domain.
   Use it only when all subdomains are trusted. A registered app origin controls redirects; it
-  does not isolate cookies. Unrelated domains require Mode 1 in a later release.
+  does not isolate cookies. Unrelated domains require Mode 1.
 - Keep `SSO_COOKIE_SECURE=true` for HTTPS. Set false only for plain HTTP local development.
   Cookies are HttpOnly, SameSite=Lax, Path=/; empty domain means host-only. Browser POST endpoints
   require JSON (logout also accepts form data) and reject an Origin other than `PUBLIC_URL`'s
@@ -130,7 +184,8 @@ preserves header-removal-before-auth ordering, then `copy_headers` supplies the 
 
 ## Operator CLI
 
-Run `python -m src.admin --help` on the server (or `docker compose … exec api python -m src.admin`).
+Run `docker compose -f deploy/docker-compose.yml exec api python -m src.admin --help`.
+Prefix the subcommands below with `docker compose -f deploy/docker-compose.yml exec api python -m src.admin`.
 Shell access is admin access. `gen-secrets` needs no `.env` or database and prints random
 `SECRET_KEY` and `INTERNAL_API_KEY` assignments. Never share them.
 
@@ -157,8 +212,8 @@ The operator trusts every registered app; there is no consent screen.
 1. Register a confidential client and its exact callback URL:
 
    ```sh
-   python -m src.admin app add myapp --name "My App" --redirect-uri https://app.example.com/callback
-   python -m src.admin app allow myapp alice
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app add myapp --name "My App" --redirect-uri https://app.example.com/callback
+   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app allow myapp alice
    ```
 
    Save the printed client secret: it is shown once and only its SHA-256 hash is stored.
@@ -226,3 +281,13 @@ The existing `/register`, `/auth/*`, `/internal/*` and JavaScript client retain 
 See the [API documentation and JS client](../README.md). Raw API clients own their login page,
 number-matching polling, token storage/rotation and logout. Browser SSO cookies cannot be used as
 API refresh tokens, and API tokens cannot authorize forward-auth requests.
+
+### Running the Authlib example behind a proxy
+
+Set `APP_ORIGIN` to the app's external origin (`scheme://host[:port]`, no path or
+trailing slash), for example `https://app.example.com`. Logout compares the browser
+Origin against this value; when unset it uses the origin part of `request.base_url`.
+Behind a trusted reverse proxy, start uvicorn with `--proxy-headers
+--forwarded-allow-ips <trusted-proxy-addresses>` so callback URLs use the external
+scheme. Configure the proxy to preserve the external Host and set forwarded headers.
+Never trust forwarded headers from arbitrary public callers.

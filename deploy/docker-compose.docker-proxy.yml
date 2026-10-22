@@ -1,0 +1,5 @@
+# Use with docker-compose.yml when the reverse proxy shares the Compose network.
+# Requires Docker Compose 2.24.0+ for !reset.
+services:
+  api:
+    ports: !reset []

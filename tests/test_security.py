@@ -277,3 +277,13 @@ def test_telegram_library_debug_logging_disabled(monkeypatch):
     importlib.reload(src.bot)
     assert logging.getLogger("telegram").getEffectiveLevel() >= logging.INFO
     assert not logging.getLogger("telegram.ext.Application").isEnabledFor(logging.DEBUG)
+
+
+@pytest.mark.parametrize('key', ['SECRET_KEY', 'INTERNAL_API_KEY'])
+@pytest.mark.parametrize('placeholder', [
+    'your_secret_key_here_minimum_32_characters_long',
+    'replace_with_shared_random_secret_at_least_32_characters',
+])
+def test_settings_reject_template_secrets(key, placeholder):
+    with pytest.raises(ValueError, match='run gen-secrets'):
+        Settings(_env_file=None, **{key: placeholder})

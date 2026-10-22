@@ -1,3 +1,4 @@
+deploy/* text eol=lf
 docker/entrypoint.sh text eol=lf
 tests/e2e/*.sh text eol=lf
 examples/nginx/*.conf text eol=lf
