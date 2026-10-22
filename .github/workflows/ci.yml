@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      # Needed by the JS client simulation (tests/client_refresh.cjs)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Tests (deprecation warnings as errors)
+        run: python -W error::DeprecationWarning -m pytest -q
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    env:
+      # Placeholder values: only needed for compose interpolation, never used at runtime
+      BOT_TOKEN: "0:ci-placeholder"
+      SECRET_KEY: ci-placeholder-secret-key-not-used-0000
+      INTERNAL_API_KEY: ci-placeholder-internal-key-not-used-00
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose -f docker/docker-compose.yml config --quiet
+
+      - name: Build images
+        run: docker compose -f docker/docker-compose.yml build
+
+      - name: API smoke test
+        run: |
+          docker compose -f docker/docker-compose.yml up -d --wait api
+          curl -fsS http://localhost:8000/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/auth/me)" = 401
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
