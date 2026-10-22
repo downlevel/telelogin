@@ -38,23 +38,24 @@ For a pre-release walkthrough, build it locally first:
 4. Invite yourself (works with both open and closed registration):
 
    ```bash
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin user invite alice
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin user invite alice
    ```
 
-   The hosted `/login` page signs in existing users; it has no registration control.
+   Admin commands run as the application user (`--user 10001`) so that SQLite files in the
+   data volume stay owned by it. The hosted `/login` page signs in existing users; it has no registration control.
    Open the printed link and press Start in Telegram. Replace `alice` consistently with
    your chosen username in these commands.
 5. Register and authorize the first app:
 
    ```bash
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app add myapp --name "My App"
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app allow myapp alice
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app add myapp --name "My App"
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app allow myapp alice
    ```
 
    For a sibling app, register its actual origin too:
 
    ```bash
-   docker compose -f deploy/docker-compose.yml exec api python -m src.admin app origin add myapp https://app.example.com
+   docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app origin add myapp https://app.example.com
    ```
 
 6. Paste the nginx, Traefik or Caddy protection snippet from
