@@ -1,18 +1,27 @@
 # TeleLogin
 
 TeleLogin provides Telegram-confirmed login through a self-hosted bot. Protect apps with
-Mode 2 forward auth through nginx, Traefik or Caddy, connect standard clients with Mode 1
-OpenID Connect, or build a custom UI with the raw API. Shared browser sessions and per-app
-access policies let connected apps reuse one Telegram confirmation. Python 3.11+.
+forward auth through nginx, Traefik or Caddy, connect standard clients with OpenID Connect,
+or build a custom UI with the raw API. Shared browser sessions and per-app access policies
+let connected apps reuse one Telegram confirmation. Python 3.11+.
+
+| I want to... | Read |
+| --- | --- |
+| Install the TeleLogin server | [Quick start](#quick-start) below |
+| Protect an app or connect it to TeleLogin | **[Integration guide](docs/INTEGRATION.md)**: which mode to choose, proxy examples, OIDC |
+| Manage users and apps | [Operator CLI](docs/INTEGRATION.md#operator-cli) |
+| Build a custom login UI | [API](#api) and the [JavaScript client](examples/js_client/) |
+| Upgrade from 1.x | [Upgrading from 1.x](#upgrading-from-1x) |
 
 ## Quick start
 
 Run these commands from the root of this checkout with Docker Compose v2 installed.
-The release image below becomes available when the maintainer publishes 2.0.0.
-For a pre-release walkthrough, build it locally first:
-`docker build -f docker/Dockerfile -t ghcr.io/downlevel/telelogin:2.0.0 .`.
+They install the server; connecting your app is covered in the
+[integration guide](docs/INTEGRATION.md).
 
-1. Create a Telegram bot with **@BotFather**. Save its token and username (without `@`).
+1. Create a Telegram bot with **@BotFather** and dedicate it to TeleLogin: TeleLogin polls it
+   for updates, so do not reuse a bot that another program reads. Save its token and
+   username (without `@`).
 2. Generate the two server secrets:
 
    ```bash
@@ -43,8 +52,11 @@ For a pre-release walkthrough, build it locally first:
 
    Admin commands run as the application user (`--user 10001`) so that SQLite files in the
    data volume stay owned by it. The hosted `/login` page signs in existing users; it has no registration control.
-   Open the printed link and press Start in Telegram. Replace `alice` consistently with
-   your chosen username in these commands.
+   The command sends no Telegram message: it prints a single-use `https://t.me/...` link,
+   valid for 30 minutes. Open it in Telegram and press **Start** to link your account.
+   `alice` is your TeleLogin username, used on the login page; it need not match your Telegram
+   username. Replace it consistently in these commands. `user list` shows a numeric
+   `telegram_id` once linked; if the link expired, run `user remove alice` and invite again.
 5. Register and authorize the first app:
 
    ```bash
@@ -59,7 +71,7 @@ For a pre-release walkthrough, build it locally first:
    ```
 
 6. Paste the nginx, Traefik or Caddy protection snippet from
-   [the integration guide](docs/INTEGRATION.md), using app id `myapp` and your actual
+   [the integration guide](docs/INTEGRATION.md#forward-auth), using app id `myapp` and your actual
    hostnames/upstream. Host proxy → `127.0.0.1:8000` (replace `8000` with `API_PORT`); proxy in Docker → `telelogin:8000` after joining the TeleLogin Compose network (`deploy_telelogin_network` by default).
    For Docker, start with the [port-removal override and network setup](docs/INTEGRATION.md#docker-proxy-networking):
 
@@ -72,7 +84,7 @@ For a pre-release walkthrough, build it locally first:
 
 For an optional OIDC app, use `app add` with `--redirect-uri` and configure the printed
 client secret, discovery URL and `openid profile` scopes as described in
-[Mode 1](docs/INTEGRATION.md#mode-1-openid-connect).
+[OpenID Connect](docs/INTEGRATION.md#openid-connect).
 
 ## Upgrading from 1.x
 
@@ -433,5 +445,5 @@ for the full terms.
 ## OpenID Connect integration
 
 TeleLogin supports confidential OIDC clients with authorization code flow, PKCE S256, RS256 ID
-tokens, and shared browser SSO. See [the integration guide](docs/INTEGRATION.md#mode-1-openid-connect)
+tokens, and shared browser SSO. See [the integration guide](docs/INTEGRATION.md#openid-connect)
 and [the Authlib example](examples/oidc_fastapi/app.py).

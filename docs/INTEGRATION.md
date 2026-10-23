@@ -8,20 +8,36 @@ One Telegram confirmation creates a browser session lasting `REFRESH_TOKEN_TTL_D
 
 | Mode | Use when | Integration |
 | --- | --- | --- |
-| Forward auth (Mode 2) | Your app shares TeleLogin's origin or a trusted parent domain | Reverse proxy configuration; no app login code |
-| OpenID Connect (Mode 1) | An app uses a standard OIDC library or an unrelated domain | Confidential clients; standard OIDC library |
-| Raw API | You need a custom login UI and token lifecycle | Existing `/register` and `/auth/*` API, [README](../README.md) |
+| [Forward auth](#forward-auth) | Your app shares TeleLogin's origin or a trusted parent domain | Reverse proxy configuration; no app login code |
+| [OpenID Connect](#openid-connect) | An app uses a standard OIDC library or an unrelated domain | Confidential clients; standard OIDC library |
+| [Raw API](#advanced-custom-ui-with-the-raw-api) | You need a custom login UI and token lifecycle | Existing `/register` and `/auth/*` API, [README](../README.md) |
+
+Most apps behind your own reverse proxy want forward auth: it needs no code in the app.
 
 All Compose commands below use the release installation in `deploy/`, run from the checkout
 root. Developers using `docker/` substitute `docker/docker-compose.yml` for that path.
 
-## Mode 2: forward auth
+## Before you start
+
+- The TeleLogin server is running as described in the [README quick start](../README.md#quick-start),
+  with a bot dedicated to TeleLogin. TeleLogin polls that bot for updates, so do not share its
+  token with another program that also reads updates.
+- Usernames are TeleLogin's own, chosen when the user is invited or registers. They need not
+  match the Telegram username: the account is linked to whichever Telegram account presses
+  Start on the registration link.
+- `user invite USERNAME` sends nothing by itself. It prints a `https://t.me/<bot>?start=...`
+  link: open it in Telegram and press **Start**. The link is single-use and expires after
+  `REGISTRATION_TOKEN_TTL_SECONDS` (30 minutes by default); to issue a new one, run
+  `user remove USERNAME` then `user invite USERNAME`. `user list` shows a numeric
+  `telegram_id` once the account is linked.
+
+## Forward auth
 
 1. Configure `PUBLIC_URL` to the externally visible TeleLogin base URL, without a trailing slash.
-   Set up your bot and API as described in the README. Register a user via `POST /register` and
-   follow the returned Telegram link, or invite one with
-   `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin user invite alice`.
-   With `REGISTRATION_MODE=closed`, only CLI invitations create users.
+   Create users with `POST /register` (follow the returned Telegram link) or with
+   `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin user invite alice`
+   (see [Before you start](#before-you-start)). With `REGISTRATION_MODE=closed`, only CLI
+   invitations create users.
 2. Register your app on the server:
    ```sh
    docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin app add myapp --name 'My App'
@@ -123,6 +139,21 @@ For a shared host, copy [telelogin.conf](../examples/nginx/telelogin.conf) and
 [prefix server](../examples/nginx/prefix.conf). For sibling subdomains use
 [subdomain.conf](../examples/nginx/subdomain.conf) and the same `protect-app.conf`.
 The app id is `set $telelogin_app myapp` in the protection snippet, included inside the app location.
+If your HTTPS `server` block already exists, do not add a new one: add
+`include /etc/nginx/telelogin.conf;` at its server scope and the protection include inside each
+app location. To protect several apps with one snippet, delete the `set` line from
+`protect-app.conf` and set the id in each location before the include:
+
+```nginx
+location ^~ /app1/ {
+    set $telelogin_app app1;
+    include /etc/nginx/protect-app.conf;
+    proxy_pass http://127.0.0.1:9001/;
+}
+```
+
+Remove any other access control the location had (basic auth, token checks) once TeleLogin
+protects it.
 Install your own TLS certificate/key at the paths shown in the server blocks. The app upstream placeholder is `127.0.0.1:9000`.
 
 nginx uses `auth_request`: 401 becomes a 302 via `X-TeleLogin-Login` and a named location.
@@ -163,7 +194,7 @@ preserves header-removal-before-auth ordering, then `copy_headers` supplies the 
   some WSGI servers) treat `_` and `-` as the same header name.
 - `SSO_COOKIE_DOMAIN` shares the browser credential with **every subdomain** of that domain.
   Use it only when all subdomains are trusted. A registered app origin controls redirects; it
-  does not isolate cookies. Unrelated domains require Mode 1.
+  does not isolate cookies. Unrelated domains require [OpenID Connect](#openid-connect).
 - Keep `SSO_COOKIE_SECURE=true` for HTTPS. Set false only for plain HTTP local development.
   Cookies are HttpOnly, SameSite=Lax, Path=/; empty domain means host-only. Browser POST endpoints
   require JSON (logout also accepts form data) and reject an Origin other than `PUBLIC_URL`'s
@@ -182,31 +213,9 @@ preserves header-removal-before-auth ordering, then `copy_headers` supplies the 
   `/auth/logout-all` revokes both kinds. Unlink/delete removes the account, sessions and allowlist
   memberships. Return URLs are app-scoped and default to `PUBLIC_URL/` if invalid.
 
-## Operator CLI
+## OpenID Connect
 
-Run `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin --help`.
-Prefix the subcommands below with `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin`.
-Shell access is admin access. `gen-secrets` needs no `.env` or database and prints random
-`SECRET_KEY` and `INTERNAL_API_KEY` assignments. Never share them.
-
-```text
-app add ID --name NAME [--policy allowlist|all] [--redirect-uri URI ...]
-app list | app show ID | app remove ID
-app policy ID allowlist|all
-app allow ID USERNAME | app disallow ID USERNAME
-app origin add|remove ID ORIGIN
-app redirect-uri add|remove ID URI
-app rotate-secret ID
-user invite USERNAME | user list | user remove USERNAME
-gen-secrets
-```
-
-`user invite` prints a one-use expiring Telegram link; `user remove` has the same deletion cascade
-as unlink. `app remove` also removes its allowlist. No stored secret is printed.
-
-## Mode 1: OpenID Connect
-
-Use Mode 1 for apps on unrelated domains or apps with a standard OIDC client library.
+Use OpenID Connect for apps on unrelated domains or apps with a standard OIDC client library.
 The operator trusts every registered app; there is no consent screen.
 
 1. Register a confidential client and its exact callback URL:
@@ -271,7 +280,7 @@ are mutually unusable. Codes are single use; replay revokes the access tokens is
 code. Removing app access also prevents `/userinfo` and code redemption.
 
 Only confidential clients with a backend and a secret are supported. Browser-only SPAs should
-use Mode 2 or a small backend. There are no OIDC refresh tokens, dynamic registration, consent
+use forward auth or a small backend. There are no OIDC refresh tokens, dynamic registration, consent
 screens, RP-initiated logout, or back-channel logout. `max_age`, `claims`, and `ui_locales` are
 unsupported and ignored. `prompt=none` fails with `login_required` without a browser session;
 `prompt=login` forces a new Telegram confirmation. Otherwise the browser session is reused.
@@ -291,3 +300,25 @@ The existing `/register`, `/auth/*`, `/internal/*` and JavaScript client retain 
 See the [API documentation and JS client](../README.md). Raw API clients own their login page,
 number-matching polling, token storage/rotation and logout. Browser SSO cookies cannot be used as
 API refresh tokens, and API tokens cannot authorize forward-auth requests.
+
+## Operator CLI
+
+Run `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin --help`.
+Prefix the subcommands below with `docker compose -f deploy/docker-compose.yml exec --user 10001 api python -m src.admin`.
+Shell access is admin access. `gen-secrets` needs no `.env` or database and prints random
+`SECRET_KEY` and `INTERNAL_API_KEY` assignments. Never share them.
+
+```text
+app add ID --name NAME [--policy allowlist|all] [--redirect-uri URI ...]
+app list | app show ID | app remove ID
+app policy ID allowlist|all
+app allow ID USERNAME | app disallow ID USERNAME
+app origin add|remove ID ORIGIN
+app redirect-uri add|remove ID URI
+app rotate-secret ID
+user invite USERNAME | user list | user remove USERNAME
+gen-secrets
+```
+
+`user invite` prints a one-use expiring Telegram link; `user remove` has the same deletion cascade
+as unlink. `app remove` also removes its allowlist. No stored secret is printed.
